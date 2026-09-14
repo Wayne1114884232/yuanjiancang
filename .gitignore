@@ -1,0 +1,5 @@
+data/*.sqlite*
+data/*.pid
+data/*.log
+data/ocr-*
+node_modules/
