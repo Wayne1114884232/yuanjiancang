@@ -1,5 +1,9 @@
-data/*.sqlite*
-data/*.pid
-data/*.log
-data/ocr-*
+data/
+.env
+.env.*
+!.env.example
+*.sqlite*
+*.log
+*.keystore
+test-results/
 node_modules/

@@ -1,13 +1,15 @@
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=10000
-ENV COMPONENT_DATA_DIR=/app/data
-COPY package.json server.mjs team-store.mjs domain.mjs spreadsheet.mjs lcsc.mjs ./
+ENV OMP_THREAD_LIMIT=1
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+COPY server.mjs cloud-store.mjs team-engine.mjs live-updates.mjs domain.mjs spreadsheet.mjs lcsc.mjs ./
+COPY lib ./lib
 COPY public ./public
 COPY scripts ./scripts
-RUN npm install --omit=dev
-RUN mkdir -p /app/data
 EXPOSE 10000
-VOLUME ["/app/data"]
-CMD ["node", "--no-warnings", "server.mjs"]
+USER node
+CMD ["node", "server.mjs"]

@@ -1,8 +1,5 @@
-import {DatabaseSync} from 'node:sqlite';
 import {randomUUID,randomBytes,createHash,scrypt,timingSafeEqual} from 'node:crypto';
 import {promisify} from 'node:util';
-import fs from 'node:fs';
-import path from 'node:path';
 import {emptyState,applyAction,validateBackup,normalizePart,mergeFeed} from './domain.mjs';
 
 const derive=promisify(scrypt),uid=()=>randomUUID(),now=()=>new Date().toISOString();
@@ -18,16 +15,11 @@ const rank={readonly:0,member:1,admin:2,owner:3};
 const globalActions=new Set(['parts.bulkUpdate','location.save','settings.save']);
 const allowedActions=new Set(['part.save','parts.bulkUpdate','location.save','settings.save','stock.post','stock.bulkPost','bom.post','project.save','project.reserve','project.release','project.issue','procurement.bulkAdd','procurement.save','procurement.receive','procurement.cancel','usage.record','substitution.save','container.save','container.assign','container.stocktake','finishedGood.post','stock.transfer','order.undo','price.record','library.restore']);
 
-export class TeamStore {
-  constructor(dir){
-    fs.mkdirSync(dir,{recursive:true});this.dir=dir;this.sql=new DatabaseSync(path.join(dir,'team.sqlite'));
-    this.sql.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS document (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);');
-    const init={schema:2,revision:0,users:[],sessions:[],libraries:[],members:[],invites:[],requests:[],shares:[],approvals:[],audit:[],transfers:[],migrations:[],receipts:[]};
-    this.sql.prepare('INSERT OR IGNORE INTO document(id,body) VALUES(1,?)').run(JSON.stringify(init));
-  }
-  read(){return JSON.parse(this.sql.prepare('SELECT body FROM document WHERE id=1').get().body);}
-  transaction(fn){this.sql.exec('BEGIN IMMEDIATE');try{const db=this.read(),result=fn(db);check(!result?.then,'事务不能包含异步操作');db.revision++;this.sql.prepare('UPDATE document SET body=? WHERE id=1').run(JSON.stringify(db));this.sql.exec('COMMIT');return result;}catch(e){this.sql.exec('ROLLBACK');throw e;}}
-  close(){this.sql.close();}
+export const emptyDocument=()=>({schema:2,revision:0,users:[],sessions:[],libraries:[],members:[],invites:[],requests:[],shares:[],approvals:[],audit:[],transfers:[],migrations:[],receipts:[]});
+export class TeamEngine {
+  constructor(document){this.document=structuredClone(document);this.changed=false;}
+  read(){return structuredClone(this.document);}
+  transaction(fn){const next=this.read(),result=fn(next);check(!result?.then,'事务不能包含异步操作');next.revision++;this.document=next;this.changed=true;return result;}
   auth(db,key){const session=db.sessions.find(x=>x.hash===digest(key||'')&&!x.revokedAt&&Date.parse(x.expiresAt)>Date.now());check(session,'请登录账号',401);const user=db.users.find(x=>x.id===session.userId);check(user,'账号不存在',401);return {user,session};}
   access(db,userId,libraryId){const library=db.libraries.find(x=>x.id===libraryId),member=db.members.find(x=>x.userId===userId&&x.libraryId===libraryId);check(library&&member,'你没有此元件库的访问权限',403);return {library,member};}
   audit(db,lid,actor,action,detail={}){db.audit.push({id:uid(),libraryId:lid,userId:actor.id,username:actor.username,action,detail,at:now()});}

@@ -1,4 +1,4 @@
-const CACHE='component-hub-team-v2.0-beta.1';
+const CACHE='component-hub-cloud-v2.1-beta.1';
 const ASSETS=['/','/index.html','/styles.css','/team.css','/app.js','/logic.js','/qr.js','/icon.svg','/icon-192.png','/icon-512.png','/manifest.webmanifest'];
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)));self.skipWaiting();});
 self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('component-hub-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});

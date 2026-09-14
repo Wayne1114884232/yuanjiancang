@@ -1,17 +1,15 @@
 services:
   - type: web
-    name: component-hub-team
+    name: yuanjiancang
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /api/health
     envVars:
-      - key: COMPONENT_DATA_DIR
-        value: /app/data
+      - key: DATABASE_URL
+        sync: false
       - key: PORT
         value: "10000"
       - key: TRUST_PROXY
         value: "true"
-    disk:
-      name: component-hub-team-data
-      mountPath: /app/data
-      sizeGB: 1
+      - key: NODE_ENV
+        value: production

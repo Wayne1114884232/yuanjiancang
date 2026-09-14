@@ -1,0 +1,10 @@
+.git
+node_modules
+data
+test-results
+tests
+.env
+.env.*
+*.sqlite*
+*.log
+*.keystore
