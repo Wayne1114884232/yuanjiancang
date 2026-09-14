@@ -6,6 +6,7 @@ ENV COMPONENT_DATA_DIR=/app/data
 COPY package.json server.mjs team-store.mjs domain.mjs spreadsheet.mjs lcsc.mjs ./
 COPY public ./public
 COPY scripts ./scripts
+RUN npm install --omit=dev
 RUN mkdir -p /app/data
 EXPOSE 10000
 VOLUME ["/app/data"]

@@ -11,7 +11,7 @@ import {validateBackup} from './domain.mjs';
 import {readSpreadsheet} from './spreadsheet.mjs';
 import {fetchLcscDetail,lcscSearchUrl} from './lcsc.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),publicDir=path.join(root,'public'),dataDir=path.resolve(process.env.COMPONENT_DATA_DIR||path.join(root,'data'));
-const store=new TeamStore(dataDir),execute=promisify(execFile),port=Number(process.env.PORT||4187),host=process.env.HOST||'0.0.0.0';
+const store=new TeamStore(dataDir);await store.connectRemote();const execute=promisify(execFile),port=Number(process.env.PORT||4187),host=process.env.HOST||'0.0.0.0';
 const legacyFile=process.env.LEGACY_INVENTORY_FILE?path.resolve(process.env.LEGACY_INVENTORY_FILE):path.resolve(root,'../元件仓/data/inventory.json');
 const VERSION='2.0.0-beta.1',limits=new Map();
 const cookie=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('hub_team_session='))?.slice(17)||'';
@@ -32,20 +32,20 @@ const server=http.createServer(async(req,res)=>{try{
     if(route==='share'&&method==='POST'){rate(req,'share',60);const b=await body(req,1000);return json(res,200,store.share(b.key));}
     const me=store.me(key);
     if(route==='auth/me'&&method==='GET')return json(res,200,me);
-    if(route==='auth/logout'&&method==='POST'){store.logout(key);return json(res,200,{ok:true},sessionHeader(req,''));}
+    if(route==='auth/logout'&&method==='POST'){store.logout(key);await store.flushRemote();return json(res,200,{ok:true},sessionHeader(req,''));}
     const lid=req.headers['x-workspace']||(route==='events'?u.searchParams.get('workspace'):null)||me.workspaces[0]?.id;
     const state=()=>store.state(key,lid);
     if(route==='state'&&method==='GET')return json(res,200,{...state(),local:local(req),remoteAccess:!local(req)});
     if(route==='team'&&method==='GET')return json(res,200,store.team(key,lid));
-    if(route==='team/action'&&method==='POST')return json(res,200,store.teamAction(key,lid,await body(req,100000)));
-    if(route==='action'&&method==='POST'){const b=await body(req);const result=store.action(key,lid,b);return json(res,result.pending?202:200,result);}
-    if(route==='approve'&&method==='POST'){const b=await body(req,4000);return json(res,200,store.approve(key,lid,b.id,b.decision));}
-    if(route==='transfer'&&method==='POST')return json(res,200,store.transfer(key,lid,await body(req,100000)));
+    if(route==='team/action'&&method==='POST'){const result=store.teamAction(key,lid,await body(req,100000));await store.flushRemote();return json(res,200,result);}
+    if(route==='action'&&method==='POST'){const b=await body(req);const result=store.action(key,lid,b);await store.flushRemote();return json(res,result.pending?202:200,result);}
+    if(route==='approve'&&method==='POST'){const b=await body(req,4000);const result=store.approve(key,lid,b.id,b.decision);await store.flushRemote();return json(res,200,result);}
+    if(route==='transfer'&&method==='POST'){const result=store.transfer(key,lid,await body(req,100000));await store.flushRemote();return json(res,200,result);}
     if(route==='backup'&&method==='GET')return json(res,200,store.backup(key,lid,u.searchParams.get('id')),{'Content-Disposition':'attachment; filename="component-library-backup.json"'});
     if(route==='restore/validate'&&method==='POST'){store.backup(key,lid);const s=validateBackup(await body(req));return json(res,200,{parts:s.parts.length,stocks:s.stocks.length,locations:s.locations.length,orders:s.orders.length});}
-    if(route==='restore'&&method==='POST'){const b=await body(req);const r=store.action(key,lid,{type:'library.restore',backup:b.backup,rev:b.rev,requestId:b.requestId});return json(res,r.pending?202:200,r);}
+    if(route==='restore'&&method==='POST'){const b=await body(req);const r=store.action(key,lid,{type:'library.restore',backup:b.backup,rev:b.rev,requestId:b.requestId});await store.flushRemote();return json(res,r.pending?202:200,r);}
     if(route==='legacy/preview'&&method==='GET'){check(local(req),'迁移本机旧库请在这台电脑的浏览器操作',403);store.backup(key,lid);const {state:s,digest}=legacy();return json(res,200,{digest,parts:s.parts.length,stocks:s.stocks.length,orders:s.orders.length,quantity:s.stocks.reduce((n,x)=>n+x.qty,0)});}
-    if(route==='legacy/import'&&method==='POST'){check(local(req),'迁移本机旧库请在这台电脑操作',403);const b=await body(req,2000),source=legacy();check(b.digest===source.digest,'旧库存已变化，请重新预览',409);return json(res,200,store.importLegacy(key,lid,source.state,source.digest));}
+    if(route==='legacy/import'&&method==='POST'){check(local(req),'迁移本机旧库请在这台电脑操作',403);const b=await body(req,2000),source=legacy();check(b.digest===source.digest,'旧库存已变化，请重新预览',409);const result=store.importLegacy(key,lid,source.state,source.digest);await store.flushRemote();return json(res,200,result);}
     if(route==='connection'&&method==='GET'){state();const addresses=Object.entries(os.networkInterfaces()).flatMap(([name,items])=>items.filter(x=>x.family==='IPv4'&&!x.internal&&!/169\.254\./.test(x.address)&&!/VMware|VirtualBox|vEthernet/i.test(name)).map(x=>({name,url:`http://${x.address}:${port}/`})));return json(res,200,{addresses});}
     if(route==='events'&&method==='GET'){
       let last=JSON.stringify({rev:state().state.rev,revision:store.me(key).revision});res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','Connection':'keep-alive','X-Accel-Buffering':'no'});res.write(`retry: 3000\ndata: ${last}\n\n`);
@@ -53,7 +53,7 @@ const server=http.createServer(async(req,res)=>{try{
     }
     if(route==='bom/parse'&&method==='POST'){check(state().role!=='readonly','只读成员不能导入BOM',403);const b=await body(req),bytes=Buffer.from(b.content||'','base64');check(bytes.length<=6000000,'BOM文件最多6MB');return json(res,200,{rows:await readSpreadsheet(bytes,b.name)});}
     if(route==='ocr'&&method==='POST'){check(state().role!=='readonly','只读成员不能识别入库',403);check(process.platform==='win32','照片识别需要Windows服务端');rate(req,'ocr',10);const b=await body(req);const ext={'image/png':'.png','image/jpeg':'.jpg','image/bmp':'.bmp','image/webp':'.webp'}[b.mime];check(ext,'图片格式不支持');const bytes=Buffer.from(b.content||'','base64');check(bytes.length>0&&bytes.length<=12000000,'图片须小于12MB');const tmp=path.join(dataDir,'ocr-'+randomUUID()+ext);fs.writeFileSync(tmp,bytes);try{const r=await execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'scripts/ocr.ps1'),'-ImagePath',tmp],{windowsHide:true,encoding:'utf8',timeout:60000,maxBuffer:2000000});state();return json(res,200,JSON.parse(r.stdout.replace(/^\uFEFF/,'').trim()));}finally{fs.rmSync(tmp,{force:true});}}
-    if(route==='lcsc/refresh'&&method==='POST'){rate(req,'lcsc',3);const source=store.backup(key,lid),tracked=source.parts.filter(x=>x.watch&&x.lcscCode);check(tracked.length>0&&tracked.length<=500,'请填写关注元件的立创编号，最多500种');const items=[],errors=[],asOf=new Date().toISOString();for(let i=0;i<tracked.length;i+=5){const rows=tracked.slice(i,i+5);const results=await Promise.allSettled(rows.map(p=>fetchLcscDetail(p.lcscCode)));results.forEach((r,j)=>{if(r.status==='rejected'){errors.push(rows[j].lcscCode);return;}for(const tier of r.value.prices)items.push({sku:rows[j].sku,source:'立创商城',sourceUrl:lcscSearchUrl(r.value.productCode),asOf,price:tier.price,currency:'USD',quantityTier:tier.quantityTier,notice:'立创商城接口阶梯报价'});});}check(items.length,'立创报价暂时无法获取，请稍后再试');const result=store.feedCommit(key,lid,source.rev,{items});return json(res,200,{...result,checked:tracked.length,failed:errors.length});}
+    if(route==='lcsc/refresh'&&method==='POST'){rate(req,'lcsc',3);const source=store.backup(key,lid),tracked=source.parts.filter(x=>x.watch&&x.lcscCode);check(tracked.length>0&&tracked.length<=500,'请填写关注元件的立创编号，最多500种');const items=[],errors=[],asOf=new Date().toISOString();for(let i=0;i<tracked.length;i+=5){const rows=tracked.slice(i,i+5);const results=await Promise.allSettled(rows.map(p=>fetchLcscDetail(p.lcscCode)));results.forEach((r,j)=>{if(r.status==='rejected'){errors.push(rows[j].lcscCode);return;}for(const tier of r.value.prices)items.push({sku:rows[j].sku,source:'立创商城',sourceUrl:lcscSearchUrl(r.value.productCode),asOf,price:tier.price,currency:'USD',quantityTier:tier.quantityTier,notice:'立创商城接口阶梯报价'});});}check(items.length,'立创报价暂时无法获取，请稍后再试');const result=store.feedCommit(key,lid,source.rev,{items});await store.flushRemote();return json(res,200,{...result,checked:tracked.length,failed:errors.length});}
     if(route==='feed/refresh'&&method==='POST')throw new Error('本地多人测试版请使用立创价格刷新；自定义厂商数据源将在云端接入阶段配置');
     return json(res,404,{error:'接口不存在'});
   }

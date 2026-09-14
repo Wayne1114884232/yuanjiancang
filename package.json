@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "元件仓 — 多人测试版：账号、共享元件库与权限隔离",
+  "dependencies": { "pg": "^8.13.1" },
   "scripts": { "start": "node --no-warnings server.mjs", "test": "node --test tests/*.test.mjs" },
   "engines": { "node": ">=22.13" }
 }

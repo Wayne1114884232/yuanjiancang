@@ -4,6 +4,7 @@ import {promisify} from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import {emptyState,applyAction,validateBackup,normalizePart,mergeFeed} from './domain.mjs';
+import pg from 'pg';
 
 const derive=promisify(scrypt),uid=()=>randomUUID(),now=()=>new Date().toISOString();
 const digest=x=>createHash('sha256').update(String(x)).digest('hex');
@@ -24,10 +25,21 @@ export class TeamStore {
     this.sql.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS document (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);');
     const init={schema:2,revision:0,users:[],sessions:[],libraries:[],members:[],invites:[],requests:[],shares:[],approvals:[],audit:[],transfers:[],migrations:[],receipts:[]};
     this.sql.prepare('INSERT OR IGNORE INTO document(id,body) VALUES(1,?)').run(JSON.stringify(init));
+    this.remotePool=null;this.remoteDirty=false;
   }
   read(){return JSON.parse(this.sql.prepare('SELECT body FROM document WHERE id=1').get().body);}
-  transaction(fn){this.sql.exec('BEGIN IMMEDIATE');try{const db=this.read(),result=fn(db);check(!result?.then,'事务不能包含异步操作');db.revision++;this.sql.prepare('UPDATE document SET body=? WHERE id=1').run(JSON.stringify(db));this.sql.exec('COMMIT');return result;}catch(e){this.sql.exec('ROLLBACK');throw e;}}
-  close(){this.sql.close();}
+  async connectRemote(url=process.env.DATABASE_URL){
+    if(!url)return;
+    this.remotePool=new pg.Pool({connectionString:url,ssl:process.env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:3,idleTimeoutMillis:10000,connectionTimeoutMillis:10000});
+    await this.remotePool.query('CREATE TABLE IF NOT EXISTS component_hub_document (id integer PRIMARY KEY, body jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())');
+    const row=(await this.remotePool.query('SELECT body FROM component_hub_document WHERE id=1')).rows[0];
+    if(row?.body)this.sql.prepare('UPDATE document SET body=? WHERE id=1').run(JSON.stringify(row.body));
+    else await this.remotePool.query('INSERT INTO component_hub_document(id,body) VALUES(1,$1::jsonb) ON CONFLICT (id) DO NOTHING',[JSON.stringify(this.read())]);
+    this.remoteDirty=false;
+  }
+  async flushRemote(){if(!this.remotePool||!this.remoteDirty)return;const body=this.read();await this.remotePool.query('INSERT INTO component_hub_document(id,body,updated_at) VALUES(1,$1::jsonb,now()) ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body,updated_at=now()',[JSON.stringify(body)]);this.remoteDirty=false;}
+  transaction(fn){this.sql.exec('BEGIN IMMEDIATE');try{const db=this.read(),result=fn(db);check(!result?.then,'事务不能包含异步操作');db.revision++;this.sql.prepare('UPDATE document SET body=? WHERE id=1').run(JSON.stringify(db));this.sql.exec('COMMIT');this.remoteDirty=true;return result;}catch(e){this.sql.exec('ROLLBACK');throw e;}}
+  async close(){await this.flushRemote();await this.remotePool?.end();this.sql.close();}
   auth(db,key){const session=db.sessions.find(x=>x.hash===digest(key||'')&&!x.revokedAt&&Date.parse(x.expiresAt)>Date.now());check(session,'请登录账号',401);const user=db.users.find(x=>x.id===session.userId);check(user,'账号不存在',401);return {user,session};}
   access(db,userId,libraryId){const library=db.libraries.find(x=>x.id===libraryId),member=db.members.find(x=>x.userId===userId&&x.libraryId===libraryId);check(library&&member,'你没有此元件库的访问权限',403);return {library,member};}
   audit(db,lid,actor,action,detail={}){db.audit.push({id:uid(),libraryId:lid,userId:actor.id,username:actor.username,action,detail,at:now()});}
