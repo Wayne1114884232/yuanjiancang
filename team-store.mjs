@@ -4,7 +4,7 @@ import {promisify} from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import {emptyState,applyAction,validateBackup,normalizePart,mergeFeed} from './domain.mjs';
-import pg from 'pg';
+let pg;
 
 const derive=promisify(scrypt),uid=()=>randomUUID(),now=()=>new Date().toISOString();
 const digest=x=>createHash('sha256').update(String(x)).digest('hex');
@@ -30,6 +30,7 @@ export class TeamStore {
   read(){return JSON.parse(this.sql.prepare('SELECT body FROM document WHERE id=1').get().body);}
   async connectRemote(url=process.env.DATABASE_URL){
     if(!url)return;
+    pg=(await import('pg')).default;
     this.remotePool=new pg.Pool({connectionString:url,ssl:process.env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:3,idleTimeoutMillis:10000,connectionTimeoutMillis:10000});
     await this.remotePool.query('CREATE TABLE IF NOT EXISTS component_hub_document (id integer PRIMARY KEY, body jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())');
     const row=(await this.remotePool.query('SELECT body FROM component_hub_document WHERE id=1')).rows[0];
@@ -154,3 +155,4 @@ export class TeamStore {
   });}
   feedCommit(key,lid,rev,feed){return this.transaction(db=>{const {user}=this.auth(db,key),{library:l,member:m}=this.access(db,user.id,lid);check(manage(m),'行情刷新需要管理员权限',403);check(l.state.rev===rev,'行情读取期间库存已变化，请重新刷新',409);const out=mergeFeed(l.state,feed);l.state=out.state;this.audit(db,lid,user,'feed.refresh',{matched:out.matched});return {...out,state:this.viewState(db,l,m)};});}
 }
+
