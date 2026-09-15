@@ -16,7 +16,7 @@ const root=path.dirname(fileURLToPath(import.meta.url)),publicDir=path.join(root
 const store=await openCloudStore(),live=new LiveUpdates(store),execute=promisify(execFile),port=Number(process.env.PORT||4188),host=process.env.HOST||'0.0.0.0';
 const publicUrl=process.env.PUBLIC_URL||process.env.RENDER_EXTERNAL_URL||'';
 if(publicUrl)check(new URL(publicUrl).protocol==='https:','公网地址必须使用 HTTPS');
-const VERSION='2.1.0-beta.1',limits=new Map();
+const VERSION='2.1.0-beta.2',limits=new Map();
 const cookie=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('hub_team_session='))?.slice(17)||'';
 function sessionHeader(req,key){const secure=Boolean(publicUrl)||req.socket.encrypted||(process.env.TRUST_PROXY==='true'&&req.headers['x-forwarded-proto']==='https');return {'Set-Cookie':`hub_team_session=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${key?2592000:0}${secure?'; Secure':''}`};}
 function json(res,status,data,headers={}){if(res.headersSent)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...headers});res.end(JSON.stringify(data));}
@@ -59,6 +59,6 @@ const server=http.createServer(async(req,res)=>{try{
   const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.svg':'image/svg+xml','.png':'image/png','.apk':'application/vnd.android.package-archive'};
   res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"});if(req.method==='HEAD')return res.end();fs.createReadStream(file).pipe(res);
 }catch(e){const dbFailure=e.code&&typeof e.code==='string';json(res,dbFailure?503:(e.status||400),{error:dbFailure?'云数据库暂时不可用，请稍后刷新核对。未显示成功的操作请勿反复更换编号提交。':(e.message||'请求失败')});}});
-server.listen(port,host,()=>console.log('元件仓云端版 '+VERSION+' listening on '+port));
+server.listen(port,host,()=>console.log('元件仓 '+VERSION+' listening on '+port));
 server.on('error',e=>{console.error('服务启动失败：'+(e.code||'UNKNOWN'));process.exitCode=1;});
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{live.close();server.closeAllConnections();server.close(async()=>{await store.close();process.exit(0);});});

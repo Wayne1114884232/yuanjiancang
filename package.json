@@ -1,9 +1,9 @@
 {
   "name": "component-hub-cloud",
-  "version": "2.1.0-beta.1",
+  "version": "2.1.0-beta.2",
   "private": true,
   "type": "module",
-  "description": "元件仓 — 多人测试版：账号、共享元件库与权限隔离",
+  "description": "元件仓：元器件库存、BOM与多人协作",
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
