@@ -16,7 +16,7 @@ const root=path.dirname(fileURLToPath(import.meta.url)),publicDir=path.join(root
 const store=await openCloudStore(),live=new LiveUpdates(store),execute=promisify(execFile),port=Number(process.env.PORT||4188),host=process.env.HOST||'0.0.0.0';
 const publicUrl=process.env.PUBLIC_URL||process.env.RENDER_EXTERNAL_URL||'';
 if(publicUrl)check(new URL(publicUrl).protocol==='https:','公网地址必须使用 HTTPS');
-const VERSION='2.1.0-beta.2',limits=new Map();
+const VERSION='2.2.0-beta.1',limits=new Map();
 const cookie=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('hub_team_session='))?.slice(17)||'';
 function sessionHeader(req,key){const secure=Boolean(publicUrl)||req.socket.encrypted||(process.env.TRUST_PROXY==='true'&&req.headers['x-forwarded-proto']==='https');return {'Set-Cookie':`hub_team_session=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${key?2592000:0}${secure?'; Secure':''}`};}
 function json(res,status,data,headers={}){if(res.headersSent)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...headers});res.end(JSON.stringify(data));}
@@ -29,9 +29,13 @@ const server=http.createServer(async(req,res)=>{try{
     check(req.headers['sec-fetch-site']!=='cross-site','拒绝跨网站请求',403);
     const route=u.pathname.slice(5),method=req.method,key=cookie(req);
     if(route==='health'&&method==='GET')return json(res,200,{app:'component-hub-team',version:VERSION,mode:'cloud-multiplayer',storage:'postgresql'});
+    if(route==='auth/recover'&&method==='POST'){rate(req,'recover',5);const b=await body(req,4000);return json(res,200,await store.recover(b.username,b.code,b.password));}
     if(['auth/login','auth/register'].includes(route)&&method==='POST'){rate(req,'account',12);const b=await body(req,4000);const r=route==='auth/register'?await store.register(b.username,b.password,b.device||req.headers['user-agent']):await store.login(b.username,b.password,b.device||req.headers['user-agent']);const {key:sessionKey,...data}=r;return json(res,200,data,sessionHeader(req,sessionKey));}
     if(route==='share'&&method==='POST'){rate(req,'share',60);const b=await body(req,1000);return json(res,200,await store.share(b.key));}
+    if(route==='version'&&method==='GET')return json(res,200,{version:VERSION,apkVersion:VERSION,apkVersionCode:12,url:'/downloads/component-hub.apk',notes:'零库存项目、批量记账、手机导航、恢复码与备份提醒'});
     const me=await store.me(key);
+    if(route==='auth/password'&&method==='POST'){rate(req,'password',5);return json(res,200,await store.passwordChange(key,await body(req,4000)));}
+    if(route==='auth/recovery'&&method==='POST'){rate(req,'recovery',5);const b=await body(req,4000);return json(res,200,await store.recoveryCreate(key,b.password));}
     if(route==='auth/me'&&method==='GET')return json(res,200,me);
     if(route==='auth/logout'&&method==='POST'){await store.logout(key);return json(res,200,{ok:true},sessionHeader(req,''));}
     const lid=req.headers['x-workspace']||(route==='events'?u.searchParams.get('workspace'):null)||me.workspaces[0]?.id;
@@ -51,7 +55,15 @@ const server=http.createServer(async(req,res)=>{try{
     if(route==='events'&&method==='GET'){await state();return live.add(req,res,key,lid);}
     if(route==='bom/parse'&&method==='POST'){check((await state()).role!=='readonly','只读成员不能导入BOM',403);const b=await body(req),bytes=Buffer.from(b.content||'','base64');check(bytes.length<=6000000,'BOM文件最多6MB');return json(res,200,{rows:await readSpreadsheet(bytes,b.name)});}
     if(route==='ocr'&&method==='POST'){check((await state()).role!=='readonly','只读成员不能识别入库',403);rate(req,'ocr',10);const b=await body(req);const ext={'image/png':'.png','image/jpeg':'.jpg','image/bmp':'.bmp','image/webp':'.webp'}[b.mime];check(ext,'图片格式不支持');const bytes=Buffer.from(b.content||'','base64');check(bytes.length>0&&bytes.length<=12000000,'图片须小于12MB');const tempDir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-ocr-')),tmp=path.join(tempDir,'label'+ext);fs.writeFileSync(tmp,bytes);try{if(process.platform!=='win32'){const r=await execute('tesseract',[tmp,'stdout','-l','eng+chi_sim','--psm','6'],{env:{...process.env,OMP_THREAD_LIMIT:'1'},timeout:45000,maxBuffer:2000000});await state();return json(res,200,{text:r.stdout,language:'eng+chi_sim',engine:'Tesseract'});}const r=await execute('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(root,'scripts/ocr.ps1'),'-ImagePath',tmp],{windowsHide:true,encoding:'utf8',timeout:60000,maxBuffer:2000000});await state();return json(res,200,JSON.parse(r.stdout.replace(/^\uFEFF/,'').trim()));}finally{fs.rmSync(tmp,{force:true});fs.rmdirSync(tempDir);}}
-    if(route==='lcsc/refresh'&&method==='POST'){rate(req,'lcsc',3);const source=await store.backup(key,lid),tracked=source.parts.filter(x=>x.watch&&x.lcscCode);check(tracked.length>0&&tracked.length<=500,'请填写关注元件的立创编号，最多500种');const items=[],errors=[],asOf=new Date().toISOString();for(let i=0;i<tracked.length;i+=5){const rows=tracked.slice(i,i+5);const results=await Promise.allSettled(rows.map(p=>fetchLcscDetail(p.lcscCode)));results.forEach((r,j)=>{if(r.status==='rejected'){errors.push(rows[j].lcscCode);return;}for(const tier of r.value.prices)items.push({sku:rows[j].sku,source:'立创商城',sourceUrl:lcscSearchUrl(r.value.productCode),asOf,price:tier.price,currency:'USD',quantityTier:tier.quantityTier,notice:'立创商城接口阶梯报价'});});}check(items.length,'立创报价暂时无法获取，请稍后再试');const result=await store.feedCommit(key,lid,source.rev,{items});return json(res,200,{...result,checked:tracked.length,failed:errors.length});}
+    if(route==='lcsc/refresh'&&method==='POST'){
+      rate(req,'lcsc',3);const source=await store.backup(key,lid),tracked=source.parts.filter(x=>(x.watch||source.stocks.some(s=>s.partId===x.id))&&x.lcscCode);
+      check(tracked.length>0&&tracked.length<=500,'请填写元件的立创编号，每次最多500种');const items=[],errors=[],asOf=new Date().toISOString();
+      for(let i=0;i<tracked.length;i+=5){const rows=tracked.slice(i,i+5),results=await Promise.allSettled(rows.map(p=>fetchLcscDetail(p.lcscCode)));
+       results.forEach((r,j)=>{if(r.status==='rejected'||!r.value.prices.length){errors.push(rows[j].lcscCode);return;}for(const tier of r.value.prices)items.push({sku:rows[j].sku,source:r.value.source,sourceUrl:r.value.sourceUrl,asOf,price:tier.price,currency:r.value.currency,quantityTier:tier.quantityTier,notice:'国际接口美元阶梯价；不代表国内人民币成交价'});});}
+      const report={at:asOf,failedCodes:errors,checked:tracked.length};
+      if(!items.length){const result=await store.priceStatus(key,lid,report);return json(res,200,{...result,checked:tracked.length,matched:0,failed:errors.length});}
+      const result=await store.feedCommit(key,lid,source.rev,{items,report});return json(res,200,{...result,checked:tracked.length,failed:errors.length});
+    }
     if(route==='feed/refresh'&&method==='POST')throw new Error('请使用立创价格刷新；本版本尚未配置自定义厂商消息源');
     return json(res,404,{error:'接口不存在'});
   }

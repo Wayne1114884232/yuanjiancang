@@ -8,12 +8,12 @@ const token=()=>randomBytes(24).toString('hex');
 const text=(x,n=200)=>String(x??'').trim().slice(0,n);
 export function check(ok,message,status=400){if(!ok)throw Object.assign(new Error(message),{status});}
 const manage=m=>['owner','admin'].includes(m.role);
-const publicUser=u=>({id:u.id,username:u.username});
+const publicUser=u=>({id:u.id,username:u.username,recoveryReady:Boolean(u.recoveryHash),recoveryCreatedAt:u.recoveryCreatedAt||null});
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const int=(n,min,max)=>Number.isSafeInteger(Number(n))&&Number(n)>=min&&Number(n)<=max;
 const rank={readonly:0,member:1,admin:2,owner:3};
 const globalActions=new Set(['parts.bulkUpdate','location.save','settings.save']);
-const allowedActions=new Set(['part.save','parts.bulkUpdate','location.save','settings.save','stock.post','stock.bulkPost','bom.post','project.save','project.reserve','project.release','project.issue','procurement.bulkAdd','procurement.save','procurement.receive','procurement.cancel','usage.record','substitution.save','container.save','container.assign','container.stocktake','finishedGood.post','stock.transfer','order.undo','price.record','library.restore']);
+const allowedActions=new Set(['part.save','parts.bulkUpdate','location.save','settings.save','stock.post','stock.batch','stock.bulkPost','bom.post','project.save','project.reserve','project.release','project.issue','procurement.bulkAdd','procurement.save','procurement.receive','procurement.cancel','usage.record','substitution.save','container.save','container.assign','container.stocktake','finishedGood.post','stock.transfer','order.undo','price.record','library.restore']);
 
 export const emptyDocument=()=>({schema:2,revision:0,users:[],sessions:[],libraries:[],members:[],invites:[],requests:[],shares:[],approvals:[],audit:[],transfers:[],migrations:[],receipts:[]});
 export class TeamEngine {
@@ -32,6 +32,25 @@ export class TeamEngine {
   }
   newSession(db,user,device){const key=token(),session={id:uid(),hash:digest(key),userId:user.id,device:text(device||'浏览器',120),createdAt:now(),expiresAt:new Date(Date.now()+30*86400000).toISOString()};db.sessions=db.sessions.filter(x=>Date.parse(x.expiresAt)>Date.now());db.sessions.push(session);return {key,...this.meFrom(db,user,session)};}
   async login(name,password,device){check(typeof password==='string'&&password.length<=128,'账号或密码不正确',401);const db=this.read(),user=db.users.find(x=>x.username.toLowerCase()===text(name,40).toLowerCase());const salt=user?.password.salt||'unused-password-salt',hash=await derive(password,salt,32);check(user&&timingSafeEqual(hash,Buffer.from(user.password.hash,'hex')),'账号或密码不正确',401);return this.transaction(db=>{const latest=db.users.find(x=>x.id===user.id);check(same(latest.password,user.password),'密码已变化，请重新登录',401);return this.newSession(db,latest,device);});}
+  async checkPassword(user,password){check(typeof password==='string'&&password.length<=128,'原密码不正确',401);const hash=await derive(password,user.password.salt,32);check(timingSafeEqual(hash,Buffer.from(user.password.hash,'hex')),'原密码不正确',401);}
+  async passwordChange(key,input){
+    const {user}=this.auth(this.read(),key);await this.checkPassword(user,input.currentPassword);
+    check(typeof input.password==='string'&&input.password.length>=8&&input.password.length<=128,'新密码须为8～128位');
+    const salt=token(),hash=(await derive(input.password,salt,32)).toString('hex');
+    return this.transaction(db=>{const {user:latest,session}=this.auth(db,key);check(same(latest.password,user.password),'密码已变化，请重新登录',409);latest.password={salt,hash};if(input.revokeOthers!==false)for(const d of db.sessions)if(d.userId===latest.id&&d.id!==session.id)d.revokedAt=now();return {ok:true};});
+  }
+  async recoveryCreate(key,password){
+    const {user}=this.auth(this.read(),key);await this.checkPassword(user,password);const code=token();
+    return this.transaction(db=>{const {user:latest}=this.auth(db,key);check(same(latest.password,user.password),'密码已变化',409);latest.recoveryHash=digest(code);latest.recoveryCreatedAt=now();return {code,createdAt:latest.recoveryCreatedAt};});
+  }
+  async recover(name,code,password){
+    const db=this.read(),user=db.users.find(x=>x.username.toLowerCase()===text(name,40).toLowerCase());
+    const expected=user?.recoveryHash||digest('invalid'),supplied=digest(text(code,200).toLowerCase());
+    check(timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(supplied,'hex'))&&user?.recoveryHash,'账号或恢复码不正确，或恢复码已使用',400);
+    check(typeof password==='string'&&password.length>=8&&password.length<=128,'新密码须为8～128位');
+    const salt=token(),hash=(await derive(password,salt,32)).toString('hex');
+    return this.transaction(next=>{const latest=next.users.find(x=>x.id===user.id);check(latest.recoveryHash===user.recoveryHash&&same(latest.password,user.password),'恢复码已失效，请重新核对',400);latest.password={salt,hash};delete latest.recoveryHash;for(const d of next.sessions)if(d.userId===latest.id)d.revokedAt=now();return {ok:true};});
+  }
   logout(key){return this.transaction(db=>{const {session}=this.auth(db,key);session.revokedAt=now();return {ok:true};});}
   visibleProject(m,projectId,write=false){if(!projectId||manage(m)||m.projects===null)return true;const entry=m.projects?.find(x=>x.id===projectId);return Boolean(entry&&(!write||entry.role==='member'));}
   locationAllowed(m,id){return manage(m)||m.locations===null||m.locations?.includes(id);}
@@ -54,6 +73,10 @@ export class TeamEngine {
     if(a.type==='part.save'&&a.part?.id)check(manage(m),'编辑共享元件资料需要管理员权限',403);
     if(a.type==='library.restore')check(manage(m),'恢复备份需要管理员权限',403);
     const s=l.state,projectIds=new Set();
+    if(a.type==='stock.batch'){
+      check(Array.isArray(a.rows)&&a.rows.length>0&&a.rows.length<=1000,'批量记录数量无效');
+      for(const row of a.rows){check(row.stockId,'批量记录缺少库位');this.authorize(db,user,l,m,{type:'stock.post',stockId:row.stockId,kind:row.kind});}
+    }
     const requireProject=id=>{if(!id)return;check(s.projects.some(x=>x.id===id),'项目不存在');check(this.visibleProject(m,id,true),'没有此项目的操作权限',403);projectIds.add(id);};
     requireProject(a.projectId);requireProject(a.project?.id);requireProject(a.project?.previousProjectId);requireProject(a.item?.projectId);for(const x of a.items||[])requireProject(x.projectId);
     if(a.type==='project.save'&&!a.project?.id)check(manage(m)||m.projects===null,'限定项目成员不能新建项目',403);
@@ -79,7 +102,7 @@ export class TeamEngine {
     if(a.type==='procurement.receive'){const item=next.procurementItems.find(x=>x.id===a.itemId);item.lastReceivedBy=user.id;item.lastReceivedName=user.username;item.lastReceivedAt=now();}
     return result;
   }
-  sensitive(a){return a.type==='library.restore'||a.type==='order.undo'||a.type==='container.stocktake'||(['stock.post','finishedGood.post'].includes(a.type)&&['损耗','盘点'].includes(a.kind));}
+  sensitive(a){return (a.type==='stock.batch'&&a.rows.some(x=>['损耗','盘点'].includes(x.kind)))||(a.type==='stock.bulkPost'&&a.kind==='损耗')|| a.type==='library.restore'||a.type==='order.undo'||a.type==='container.stocktake'||(['stock.post','finishedGood.post'].includes(a.type)&&['损耗','盘点'].includes(a.kind));}
   fingerprint(a){const payload=structuredClone(a);delete payload.rev;delete payload.requestId;return digest(JSON.stringify(payload));}
   receipt(db,user,lid,a){check(typeof a.requestId==='string'&&a.requestId.length>=10&&a.requestId.length<=100,'请求缺少唯一编号');const prior=db.receipts.find(x=>x.userId===user.id&&x.libraryId===lid&&x.requestId===a.requestId);if(prior)check(prior.fingerprint===this.fingerprint(a),'同一请求编号不能用于不同操作',409);return prior;}
   saveReceipt(db,user,lid,a,result){db.receipts.push({userId:user.id,libraryId:lid,requestId:a.requestId,fingerprint:this.fingerprint(a),result});if(db.receipts.length>10000)db.receipts.splice(0,db.receipts.length-10000);}
@@ -132,5 +155,6 @@ export class TeamEngine {
     else {p=normalizePart({...original,id:undefined});targetState.parts.push(p);}
     const incoming=applyAction(targetState,{type:'stock.post',kind:'入库',partId:p.id,locationId:a.locationId,bin:a.bin||'',qty:Number(a.qty),note,requestId:a.requestId});out.order.transferId=tid;incoming.order.transferId=tid;incoming.order.actorId=user.id;incoming.order.actorName=user.username;src.library.state=out.state;dest.library.state=incoming.state;const transfer={id:tid,from:fromId,to:dest.library.id,fromName:src.library.name,toName:dest.library.name,sku:original.sku,qty:Number(a.qty),userId:user.id,username:user.username,at:now(),outOrderId:out.order.id,inOrderId:incoming.order.id};db.transfers.push(transfer);this.audit(db,fromId,user,'library.transfer.out',{transferId:tid,qty:transfer.qty});this.audit(db,dest.library.id,user,'library.transfer.in',{transferId:tid,qty:transfer.qty});const result={transfer};this.saveReceipt(db,user,fromId,{...a,type:'library.transfer'},result);return result;
   });}
-  feedCommit(key,lid,rev,feed){return this.transaction(db=>{const {user}=this.auth(db,key),{library:l,member:m}=this.access(db,user.id,lid);check(manage(m),'行情刷新需要管理员权限',403);check(l.state.rev===rev,'行情读取期间库存已变化，请重新刷新',409);const out=mergeFeed(l.state,feed);l.state=out.state;this.audit(db,lid,user,'feed.refresh',{matched:out.matched});return {...out,state:this.viewState(db,l,m)};});}
+  priceStatus(key,lid,report){return this.transaction(db=>{const {user}=this.auth(db,key),{library:l,member:m}=this.access(db,user.id,lid);check(manage(m),'需要管理员权限',403);l.state.settings.lcscLastAttempt=report.at;l.state.settings.lcscLastSyncError='本次未获取有效报价：'+report.failedCodes.join('、');l.state.rev++;l.state.updatedAt=now();return {state:this.viewState(db,l,m)};});}
+  feedCommit(key,lid,rev,feed){return this.transaction(db=>{const {user}=this.auth(db,key),{library:l,member:m}=this.access(db,user.id,lid);check(manage(m),'行情刷新需要管理员权限',403);check(l.state.rev===rev,'行情读取期间库存已变化，请重新刷新',409);const out=mergeFeed(l.state,feed);l.state=out.state;if(feed.report){l.state.settings.lcscLastSync=feed.report.at;l.state.settings.lcscLastSyncError=feed.report.failedCodes.length?'以下编号获取失败：'+feed.report.failedCodes.join('、'):'';}this.audit(db,lid,user,'feed.refresh',{matched:out.matched});return {...out,state:this.viewState(db,l,m)};});}
 }

@@ -12,7 +12,7 @@ test('normalizes and validates LCSC part numbers',()=>{
 
 test('parses only valid positive USD price tiers from LCSC response',()=>{
   const detail=parseLcscDetail({code:200,result:{productCode:'C17976',productModel:'1206W4F680JT5E',stockNumber:102700,pdfUrl:'https://datasheet.lcsc.com/a.pdf',productPriceList:[{ladder:50,usdPrice:.0159},{ladder:500,usdPrice:.0134},{ladder:0,usdPrice:1},{ladder:1000,usdPrice:0}]}});
-  assert.deepEqual(detail,{productCode:'C17976',productModel:'1206W4F680JT5E',stockNumber:102700,prices:[{quantityTier:'50',price:.0159},{quantityTier:'500',price:.0134}],datasheetUrl:'https://datasheet.lcsc.com/a.pdf'});
+  assert.deepEqual(detail,{productCode:'C17976',source:'LCSC 国际报价',currency:'USD',sourceUrl:'https://wmsc.lcsc.com/ftps/wm/product/detail?productCode=C17976',productModel:'1206W4F680JT5E',stockNumber:102700,prices:[{quantityTier:'50',price:.0159},{quantityTier:'500',price:.0134}],datasheetUrl:'https://datasheet.lcsc.com/a.pdf'});
   assert.equal(parseLcscDetail({code:404,result:null},'C17976'),null);
 });
 

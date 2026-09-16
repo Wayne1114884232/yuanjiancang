@@ -77,7 +77,17 @@ function allocatePart(s,partId,qty,preferredLocationId=''){
 function validDate(value,label){const v=clean(value,80);if(v)assert(Number.isFinite(Date.parse(v)),`${label}格式无效`);return v;}
 export function applyAction(original, action) {
   const s=copy(original); const result={};
-  if (action.type==='part.save') {
+  if(action.type==='stock.batch') {
+    assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'请选择1～1000笔记录');
+    let next=s;const orders=[];
+    for(const row of action.rows){
+      assert(['入库','出库','损耗','盘点'].includes(row.kind),'批量记录类型无效');
+      const st=next.stocks.find(x=>x.id===row.stockId);assert(st,'库位不存在');
+      if(row.kind==='盘点')assert(Number(row.snapshotQty)===st.qty,'盘点基准已变化，请重新核对该库位');
+      const out=applyAction(next,{type:'stock.post',stockId:row.stockId,kind:row.kind,qty:row.qty,boards:row.boards??1,loss:row.loss??0,note:row.note||action.note,requestId:action.requestId});next=out.state;orders.push(out.order);
+    }
+    next.rev=original.rev+1;return {state:next,orders};
+  } else if (action.type==='part.save') {
     const existing=action.part.id?s.parts.find(p=>p.id===action.part.id):undefined;
     assert(!action.part.id||existing,'元件不存在');
     const p=normalizePart(action.part,existing); assert(!s.parts.some(x=>x.id!==p.id&&x.sku.toLowerCase()===p.sku.toLowerCase()),'编号 / 型号已存在，请使用原元件入库；不同规格请添加编号后缀');
@@ -109,9 +119,9 @@ export function applyAction(original, action) {
     assert(delta!==0,'盘点数量与现有库存相同，无需调整');
     result.order=postOrder(s,{type:action.kind,note:action.note,boards,lines:[{stockId:stock.id,delta,base,loss}],requestId:action.requestId});
   } else if (action.type==='stock.bulkPost') {
-    assert(action.kind==='出库','批量操作目前只支持出库'); assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'请选择至少一个库存库位，单批最多1000个');
+    assert(['出库','损耗'].includes(action.kind),'批量操作支持出库或损耗'); assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'请选择至少一个库存库位，单批最多1000个');
     const lines=action.rows.map(row=>{const stock=s.stocks.find(x=>x.id===row.stockId);assert(stock,'批量出库包含不存在的库位');const qty=integer(row.qty,'出库数量',1);assert(stock.qty>=qty,`${s.parts.find(p=>p.id===stock.partId)?.sku||'元件'} 库存不足：需 ${qty}，现有 ${stock.qty}，整批未提交`);return {stockId:stock.id,delta:-qty,base:qty,loss:0};});
-    result.order=postOrder(s,{type:'出库',note:action.note,source:'批量出库',lines,requestId:action.requestId});
+    result.order=postOrder(s,{type:action.kind,note:action.note,source:action.kind==='损耗'?'批量损耗':'批量出库',lines,requestId:action.requestId});
   } else if (action.type==='bom.post') {
     assert(['入库','出库'].includes(action.kind),'BOM方向无效'); const boards=integer(action.boards,'板数',1); const rate=decimal(action.lossRate??0,'损耗率',0,100);
     assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'BOM必须包含1～1000行');
@@ -131,7 +141,18 @@ export function applyAction(original, action) {
     });
     result.order=postOrder(s,{type:action.kind,note:action.note,boards,source:'BOM',lines,requestId:action.requestId});
   } else if(action.type==='project.save'){
-    const existing=action.project?.id?s.projects.find(x=>x.id===action.project.id):undefined;assert(!action.project?.id||existing,'项目不存在');const project=normalizeProject(s,action.project,existing);if(existing){s.projects[s.projects.findIndex(x=>x.id===project.id)]=project;releaseProjectReservations(s,project.id);}else s.projects.push(project);result.projectId=project.id;
+    const existing=action.project?.id?s.projects.find(x=>x.id===action.project.id):undefined;assert(!action.project?.id||existing,'项目不存在');const raw=copy(action.project);const rows=raw.rows;
+    assert(Array.isArray(rows)&&rows.length>0&&rows.length<=1000,'项目BOM必须包含1～1000行');
+    raw.rows=rows.filter(r=>!(r.excluded&&!r.forceInclude)).map(row=>{
+      if(row.partId)return row;
+      assert(row.autoPart,'项目存在未确认的物料');const draft=normalizeBomDraft(row.autoPart);
+      let p=s.parts.find(x=>x.sku.toLowerCase()===draft.sku.toLowerCase());
+      if(p){for(const k of ['value','package','voltage','tolerance','dielectric','mount','category'])if(draft[k])assert(String(p[k]||'').toLowerCase()===String(draft[k]).toLowerCase(),draft.sku+' 与现有资料的 '+k+' 不一致，请确认型号或修改编号');}
+      else{s.parts.push(draft);p=draft;}
+      if(action.locationId)findStock(s,p.id,action.locationId,action.bin||'');
+      return {...row,partId:p.id};
+    });
+    const project=normalizeProject(s,raw,existing);if(existing){s.projects[s.projects.findIndex(x=>x.id===project.id)]=project;releaseProjectReservations(s,project.id);}else s.projects.push(project);result.projectId=project.id;
   } else if(action.type==='project.reserve'){
     const project=s.projects.find(x=>x.id===action.projectId);assert(project,'项目不存在');const boards=integer(action.boards,'预留板数',1),rate=decimal(action.lossRate??0,'损耗率',0,100);const requested=[];
     for(const row of project.rows){const base=row.perBoard*boards,qty=base+Math.ceil(base*rate/100)+row.loss;integer(qty,'预留数量');const available=partTotal(s,row.partId)-reservedTotal(s,row.partId,project.id);assert(available>=qty,`${s.parts.find(x=>x.id===row.partId)?.sku} 可用 ${available}，预留需要 ${qty}`);requested.push({id:id(),projectId:project.id,partId:row.partId,qty,boards,lossRate:rate,createdAt:now()});}
@@ -217,7 +238,7 @@ export function validateBackup(raw) {
 export function mergeFeed(original, feed) {
   assert(feed&&Array.isArray(feed.items)&&feed.items.length<=5000,'数据源需返回 { items: [...] }，最多5000条'); const s=copy(original);let matched=0;
   for (const item of feed.items) {
-    const part=s.parts.find(p=>p.watch&&p.sku.toLowerCase()===clean(item.sku).toLowerCase()); if(!part)continue;
+    const part=s.parts.find(p=>(p.watch||s.stocks.some(st=>st.partId===p.id))&&p.sku.toLowerCase()===clean(item.sku).toLowerCase()); if(!part)continue;
     const asOf=new Date(item.asOf); assert(Number.isFinite(+asOf)&&+asOf<Date.now()+86400000,'数据源包含无效日期');
     const source=clean(item.source,200); assert(source,'数据源条目必须标注 source'); const sourceUrl=url(item.sourceUrl); assert(sourceUrl,'数据源条目必须提供原始链接');
     const lifecycle=clean(item.lifecycle).toLowerCase(); assert(['','active','nrnd','eol','obsolete'].includes(lifecycle),'生命周期状态无效');
