@@ -9,8 +9,8 @@ export function databaseOptions(connectionString,allowLocal=false){
   for(const key of ['sslmode','sslcert','sslkey','sslrootcert'])u.searchParams.delete(key);
   return {connectionString:u.toString(),ssl:allowLocal&&local?false:{rejectUnauthorized:true},max:4,idleTimeoutMillis:10000,connectionTimeoutMillis:20000,statement_timeout:20000};
 }
-const reads=new Set(['me','state','team','backup','share']);
-const methods=[...reads,'register','login','logout','passwordChange','recoveryCreate','recover','action','teamAction','approve','transfer','importLegacy','feedCommit','priceStatus'];
+const reads=new Set(['me','state','team','backup','share','ownerRecoveryLog']);
+const methods=[...reads,'configureOwner','ownerRecoveryCreate','register','login','logout','passwordChange','recoveryCreate','recover','action','teamAction','approve','transfer','importLegacy','feedCommit','priceStatus'];
 export class CloudStore {
   constructor(pool){this.pool=pool;this.pool.on('error',()=>{});}
   async initialize(){

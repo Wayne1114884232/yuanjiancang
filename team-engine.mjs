@@ -25,7 +25,7 @@ export class TeamEngine {
   audit(db,lid,actor,action,detail={}){db.audit.push({id:uid(),libraryId:lid,userId:actor.id,username:actor.username,action,detail,at:now()});}
   newLibrary(db,user,name,personal=false){check(text(name),'请填写元件库名称');check(db.libraries.filter(x=>x.ownerId===user.id).length<30,'每个账号最多创建30个库');const library={id:uid(),name:text(name,80),ownerId:user.id,personal,createdAt:now(),policy:{approvals:false},state:emptyState(),backups:[]};db.libraries.push(library);db.members.push({id:uid(),libraryId:library.id,userId:user.id,role:'owner',locations:null,projects:null,createdAt:now()});this.audit(db,library.id,user,'library.create',{name:library.name});return library;}
   workspace(db,l,m){return {id:l.id,name:l.name,ownerId:l.ownerId,personal:l.personal,role:m.role,locations:m.locations,projects:m.projects,policy:l.policy};}
-  meFrom(db,user,session){return {user:publicUser(user),sessionId:session.id,revision:db.revision,workspaces:db.members.filter(x=>x.userId===user.id).map(m=>this.workspace(db,db.libraries.find(x=>x.id===m.libraryId),m))};}
+  meFrom(db,user,session){return {user:{...publicUser(user),appOwner:db.appOwnerId===user.id},sessionId:session.id,revision:db.revision,workspaces:db.members.filter(x=>x.userId===user.id).map(m=>this.workspace(db,db.libraries.find(x=>x.id===m.libraryId),m))};}
   me(key){const db=this.read(),{user,session}=this.auth(db,key);return this.meFrom(db,user,session);}
   async register(name,password,device){name=text(name,40);check(/^[\p{L}\p{N}_.@-]{3,40}$/u.test(name),'账号须为3～40位中英文、数字或 _ . @ -');check(typeof password==='string'&&password.length>=8&&password.length<=128,'密码须为8～128位');const salt=token(),hash=(await derive(password,salt,32)).toString('hex');
     return this.transaction(db=>{check(!db.users.some(x=>x.username.toLowerCase()===name.toLowerCase()),'账号已存在');const user={id:uid(),username:name,password:{salt,hash},createdAt:now()};db.users.push(user);this.newLibrary(db,user,'我的库存',true);return this.newSession(db,user,device);});
@@ -37,7 +37,17 @@ export class TeamEngine {
     const {user}=this.auth(this.read(),key);await this.checkPassword(user,input.currentPassword);
     check(typeof input.password==='string'&&input.password.length>=8&&input.password.length<=128,'新密码须为8～128位');
     const salt=token(),hash=(await derive(input.password,salt,32)).toString('hex');
-    return this.transaction(db=>{const {user:latest,session}=this.auth(db,key);check(same(latest.password,user.password),'密码已变化，请重新登录',409);latest.password={salt,hash};if(input.revokeOthers!==false)for(const d of db.sessions)if(d.userId===latest.id&&d.id!==session.id)d.revokedAt=now();return {ok:true};});
+    return this.transaction(db=>{const {user:latest,session}=this.auth(db,key);check(same(latest.password,user.password),'密码已变化，请重新登录',409);latest.password={salt,hash};delete latest.assistedRecovery;if(input.revokeOthers!==false)for(const d of db.sessions)if(d.userId===latest.id&&d.id!==session.id)d.revokedAt=now();return {ok:true};});
+  }
+  configureOwner(username){return this.transaction(db=>{if(db.appOwnerConfigured)return {configured:Boolean(db.appOwnerId)};const requested=text(username,40).toLowerCase();check(requested,'未指定 APP 所有者');const user=db.users.find(u=>u.username.toLowerCase()===requested);db.appOwnerConfigured=requested;db.appOwnerId=user?.id||null;return {configured:Boolean(user)};});}
+  ownerAccess(db,key){const auth=this.auth(db,key);check(db.appOwnerId&&auth.user.id===db.appOwnerId,'只有 APP 所有者可以办理账号找回',403);return auth;}
+  ownerRecoveryLog(key){const db=this.read();this.ownerAccess(db,key);return {records:db.audit.filter(a=>a.libraryId===null&&a.action.startsWith('account.recovery.')).slice(-100).reverse()};}
+  async ownerRecoveryCreate(key,input){
+    const db=this.read(),{user}=this.ownerAccess(db,key);await this.checkPassword(user,input.currentPassword);
+    check(input.identityConfirmed===true,'请先核实申请人的身份');check(text(input.reason,300),'请填写核实说明');
+    const target=db.users.find(u=>u.username.toLowerCase()===text(input.username,40).toLowerCase());check(target,'没有找到这个账号');
+    const code=token(),expiresAt=new Date(Date.now()+30*60000).toISOString();
+    return this.transaction(next=>{const {user:actor}=this.ownerAccess(next,key);check(same(actor.password,user.password),'密码已变化，请重新验证',409);const latest=next.users.find(u=>u.id===target.id);check(latest,'账号不存在');latest.assistedRecovery={hash:digest(code),expiresAt,issuedBy:actor.id};this.audit(next,null,actor,'account.recovery.issue',{targetId:latest.id,targetUsername:latest.username,expiresAt,reason:text(input.reason,300)});return {username:latest.username,code,expiresAt};});
   }
   async recoveryCreate(key,password){
     const {user}=this.auth(this.read(),key);await this.checkPassword(user,password);const code=token();
@@ -45,11 +55,12 @@ export class TeamEngine {
   }
   async recover(name,code,password){
     const db=this.read(),user=db.users.find(x=>x.username.toLowerCase()===text(name,40).toLowerCase());
-    const expected=user?.recoveryHash||digest('invalid'),supplied=digest(text(code,200).toLowerCase());
-    check(timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(supplied,'hex'))&&user?.recoveryHash,'账号或恢复码不正确，或恢复码已使用',400);
+    const supplied=digest(text(code,200).toLowerCase()),matches=hash=>Boolean(hash)&&timingSafeEqual(Buffer.from(hash||digest('invalid'),'hex'),Buffer.from(supplied,'hex'));
+    const personal=matches(user?.recoveryHash),assisted=matches(user?.assistedRecovery?.hash)&&Date.parse(user?.assistedRecovery?.expiresAt)>Date.now();
+    check(user&&(personal||assisted),'账号或恢复码不正确，或恢复码已使用/过期',400);
     check(typeof password==='string'&&password.length>=8&&password.length<=128,'新密码须为8～128位');
     const salt=token(),hash=(await derive(password,salt,32)).toString('hex');
-    return this.transaction(next=>{const latest=next.users.find(x=>x.id===user.id);check(latest.recoveryHash===user.recoveryHash&&same(latest.password,user.password),'恢复码已失效，请重新核对',400);latest.password={salt,hash};delete latest.recoveryHash;for(const d of next.sessions)if(d.userId===latest.id)d.revokedAt=now();return {ok:true};});
+    return this.transaction(next=>{const latest=next.users.find(x=>x.id===user.id);check(latest&&same(latest.password,user.password)&&(personal?latest.recoveryHash===user.recoveryHash:latest.assistedRecovery?.hash===user.assistedRecovery?.hash&&Date.parse(latest.assistedRecovery?.expiresAt)>Date.now()),'恢复码已失效，请重新核对',400);latest.password={salt,hash};delete latest.recoveryHash;delete latest.assistedRecovery;this.audit(next,null,latest,'account.recovery.used',{mode:assisted?'owner':'personal'});for(const d of next.sessions)if(d.userId===latest.id)d.revokedAt=now();return {ok:true};});
   }
   logout(key){return this.transaction(db=>{const {session}=this.auth(db,key);session.revokedAt=now();return {ok:true};});}
   visibleProject(m,projectId,write=false){if(!projectId||manage(m)||m.projects===null)return true;const entry=m.projects?.find(x=>x.id===projectId);return Boolean(entry&&(!write||entry.role==='member'));}

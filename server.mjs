@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {VERSION,releaseInfo} from './release.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -16,7 +17,9 @@ const root=path.dirname(fileURLToPath(import.meta.url)),publicDir=path.join(root
 const store=await openCloudStore(),live=new LiveUpdates(store),execute=promisify(execFile),port=Number(process.env.PORT||4188),host=process.env.HOST||'0.0.0.0';
 const publicUrl=process.env.PUBLIC_URL||process.env.RENDER_EXTERNAL_URL||'';
 if(publicUrl)check(new URL(publicUrl).protocol==='https:','公网地址必须使用 HTTPS');
-const VERSION='2.2.0-beta.1',limits=new Map();
+const ownerConfig=JSON.parse(fs.readFileSync(new URL('./owner-config.json',import.meta.url),'utf8'));
+const ownerBinding=await store.configureOwner(ownerConfig.username);if(!ownerBinding.configured)console.warn('APP 所有者未绑定，代发恢复码已禁用。');
+const limits=new Map();
 const cookie=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('hub_team_session='))?.slice(17)||'';
 function sessionHeader(req,key){const secure=Boolean(publicUrl)||req.socket.encrypted||(process.env.TRUST_PROXY==='true'&&req.headers['x-forwarded-proto']==='https');return {'Set-Cookie':`hub_team_session=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${key?2592000:0}${secure?'; Secure':''}`};}
 function json(res,status,data,headers={}){if(res.headersSent)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...headers});res.end(JSON.stringify(data));}
@@ -28,12 +31,14 @@ const server=http.createServer(async(req,res)=>{try{
     check(!req.headers.origin||(publicUrl?[new URL(publicUrl).origin]:[`${u.protocol}//${req.headers.host}`,`https://${req.headers.host}`]).includes(req.headers.origin),'拒绝来自其他网站的请求',403);
     check(req.headers['sec-fetch-site']!=='cross-site','拒绝跨网站请求',403);
     const route=u.pathname.slice(5),method=req.method,key=cookie(req);
-    if(route==='health'&&method==='GET')return json(res,200,{app:'component-hub-team',version:VERSION,mode:'cloud-multiplayer',storage:'postgresql'});
+    if(route==='health'&&method==='GET')return json(res,200,{app:'component-hub-team',version:VERSION,mode:'cloud-multiplayer',storage:'postgresql',appOwnerConfigured:ownerBinding.configured});
     if(route==='auth/recover'&&method==='POST'){rate(req,'recover',5);const b=await body(req,4000);return json(res,200,await store.recover(b.username,b.code,b.password));}
     if(['auth/login','auth/register'].includes(route)&&method==='POST'){rate(req,'account',12);const b=await body(req,4000);const r=route==='auth/register'?await store.register(b.username,b.password,b.device||req.headers['user-agent']):await store.login(b.username,b.password,b.device||req.headers['user-agent']);const {key:sessionKey,...data}=r;return json(res,200,data,sessionHeader(req,sessionKey));}
     if(route==='share'&&method==='POST'){rate(req,'share',60);const b=await body(req,1000);return json(res,200,await store.share(b.key));}
-    if(route==='version'&&method==='GET')return json(res,200,{version:VERSION,apkVersion:VERSION,apkVersionCode:12,url:'/downloads/component-hub.apk',notes:'零库存项目、批量记账、手机导航、恢复码与备份提醒'});
+    if(route==='version'&&method==='GET')return json(res,200,releaseInfo());
     const me=await store.me(key);
+    if(route==='owner/recovery'&&method==='POST'){rate(req,'owner-recovery',5);return json(res,200,await store.ownerRecoveryCreate(key,await body(req,4000)));}
+    if(route==='owner/recovery-log'&&method==='GET')return json(res,200,await store.ownerRecoveryLog(key));
     if(route==='auth/password'&&method==='POST'){rate(req,'password',5);return json(res,200,await store.passwordChange(key,await body(req,4000)));}
     if(route==='auth/recovery'&&method==='POST'){rate(req,'recovery',5);const b=await body(req,4000);return json(res,200,await store.recoveryCreate(key,b.password));}
     if(route==='auth/me'&&method==='GET')return json(res,200,me);

@@ -25,6 +25,7 @@ test('PostgreSQL cloud persistence and two-device HTTP workflow',async t=>{
   await t.test('approval has no early deduction; readonly and device revocation persist',async()=>{await team(alice,lid,'member.save',{userId:bob.user.id,role:'admin',locations:null,projects:null});await team(alice,lid,'policy.save',{approvals:true});const pending=await action(alice,lid,'stock.post',{kind:'损耗',stockId:state.stocks[0].id,qty:1});assert.equal(pending.pending,true);assert.equal(pending.state.stocks[0].qty,26);await assert.rejects(a.approve(alice.key,lid,pending.approvalId,'approve'),/不能审批/);await b.approve(bob.key,lid,pending.approvalId,'approve');assert.equal((await a.state(alice.key,lid)).state.stocks[0].qty,25);await team(alice,lid,'policy.save',{approvals:false});await team(alice,lid,'member.save',{userId:bob.user.id,role:'readonly',locations:null,projects:null});await assert.rejects(action(bob,lid,'stock.post',{kind:'出库',stockId:state.stocks[0].id,qty:1}),/只读/);});
   await t.test('backup restore and bulk issue preserve final counts',async()=>{const backup=await a.backup(alice.key,lid);await action(alice,lid,'stock.bulkPost',{kind:'出库',rows:backup.stocks.map(x=>({stockId:x.id,qty:x.qty}))});assert.equal((await b.state(alice.key,lid)).state.stocks[0].qty,0);await action(alice,lid,'library.restore',{backup});assert.equal((await b.state(alice.key,lid)).state.stocks[0].qty,25);assert.equal((await b.team(alice.key,lid)).backups.at(-1).reason,'恢复前自动备份');});
   await t.test('HTTPS certificate validation cannot be disabled for remote databases',()=>{assert.equal(databaseOptions('postgresql://u:p@example.com/db?sslmode=disable',true).ssl.rejectUnauthorized,true);assert.equal(databaseOptions(pg.url,true).ssl,false);assert.throws(()=>databaseOptions(''),/DATABASE_URL/);});
+  await a.configureOwner('alice');
   await t.test('HTTP login, events, writes, restart persistence and migration',async()=>{
     const port=await freePort(),base='http://127.0.0.1:'+port;let child;
     const start=async()=>{let logs='';child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,DATABASE_URL:pg.url,PORT:String(port),HOST:'127.0.0.1',ALLOW_LOCAL_DATABASE:'true',PUBLIC_URL:'',RENDER_EXTERNAL_URL:''},windowsHide:true,stdio:['ignore','pipe','pipe']});child.stdout.on('data',()=>{});child.stderr.on('data',x=>logs+=x);for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)return;}catch{}if(child.exitCode!==null)throw Error(logs);await new Promise(r=>setTimeout(r,50));}throw Error('startup timeout '+logs);};
@@ -40,7 +41,7 @@ test('PostgreSQL cloud persistence and two-device HTTP workflow',async t=>{
     assert.equal((await call('legacy/import','POST',{backup:legacy},jar,target)).status,400);
     assert.equal((await call('auth/logout','POST',{},jar)).status,200);await stop();await start();assert.equal((await call('state','GET',undefined,jar)).status,401);
     const newAccount=await call('auth/register','POST',{username:'newcloud','password':'cloud-password-12'});assert.equal(newAccount.status,200);await stop();await start();assert.equal((await call('auth/login','POST',{username:'newcloud','password':'cloud-password-12'})).status,200);
-    assert.equal((await call('version')).data.apkVersionCode,12);
+    assert.equal((await call('version')).data.apkVersionCode,13);
     let acct=await call('auth/login','POST',{username:'newcloud',password:'cloud-password-12'}),acctJar=acct.cookie;const acctLib=acct.data.workspaces[0].id;
     assert.equal((await call('auth/password','POST',{currentPassword:'wrong',password:'changed-pass-123'},acctJar)).status,401);
     const recovery=await call('auth/recovery','POST',{password:'cloud-password-12'},acctJar);assert.equal(recovery.status,200);assert.ok(recovery.data.code);
@@ -59,6 +60,21 @@ test('PostgreSQL cloud persistence and two-device HTTP workflow',async t=>{
     const done=await call('action','POST',batch,acctJar,acctLib);assert.equal(done.status,200);assert.equal(done.data.state.stocks[0].qty,7);
     await stop();await start();
     const again=await call('action','POST',batch,acctJar,acctLib);assert.equal(again.data.duplicate,true);assert.equal(again.data.state.stocks[0].qty,7);
+    const own=await a.login('alice','correct-horse-123','owner test'),ownerJar='hub_team_session='+own.key;
+    assert.equal((await call('auth/me','GET',undefined,ownerJar)).data.user.appOwner,true);
+    const request={username:'newcloud',currentPassword:'correct-horse-123',identityConfirmed:true,reason:'HTTP本人核验'};
+    assert.equal((await call('owner/recovery','POST',request,acctJar)).status,403);
+    assert.equal((await call('owner/recovery','POST',request)).status,401);
+    const delegated=await call('owner/recovery','POST',request,ownerJar);assert.equal(delegated.status,200);assert.equal(delegated.data.username,'newcloud');
+    assert.equal((await call('owner/recovery-log','GET',undefined,acctJar)).status,403);
+    const log=await call('owner/recovery-log','GET',undefined,ownerJar);assert.equal(log.status,200);assert.equal(JSON.stringify(log.data).includes(delegated.data.code),false);
+    await stop();await start();
+    assert.equal((await call('auth/recover','POST',{username:'newcloud',code:delegated.data.code,password:'owner-assisted-new'})).status,200);
+    assert.equal((await call('auth/me','GET',undefined,acctJar)).status,401);
+    assert.equal((await call('auth/recover','POST',{username:'newcloud',code:delegated.data.code,password:'owner-assisted-again'})).status,400);
+    const recovered=await call('auth/login','POST',{username:'newcloud',password:'owner-assisted-new'});
+    assert.equal((await call('state','GET',undefined,recovered.cookie,acctLib)).data.state.stocks[0].qty,7);
+    const release=(await call('version')).data;assert.match(release.sha256,/^[a-f0-9]{64}$/);assert.ok(release.size>0);assert.equal(release.apkVersion,'2.2.1');
     await stop();
   });
 });

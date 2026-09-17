@@ -1,4 +1,4 @@
-# 元件仓 · 免费云端试用版 2.2.0-beta.1
+# 元件仓 · 免费云端试用版 2.2.1
 
 手机 APK、电脑浏览器和其他成员连接同一个 HTTPS 云服务，已提交库存保存在 Neon PostgreSQL。电脑关机不影响云端库存操作。此仓库只包含程序、安装包和测试，不包含用户库存、数据库密码或 APK 签名私钥。
 
@@ -19,7 +19,7 @@
    | `PORT` | `10000` |
 
 5. 确认显示免费后，点击 **Deploy Web Service**。也可通过 **New → Blueprint** 读取 `render.yaml`，该文件已指定 `plan: free`，并要求在平台安全填写 `DATABASE_URL`。
-6. 等待状态为 **Live**，打开 Render 给出的 `https://…onrender.com` 地址。`/api/health` 应显示 `version: 2.2.0-beta.1`、`mode: cloud-multiplayer`、`storage: postgresql`。
+6. 等待状态为 **Live**，打开 Render 给出的 `https://…onrender.com` 地址。`/api/health` 应显示 `version: 2.2.1`、`mode: cloud-multiplayer`、`storage: postgresql`。
 
 服务启动前必须连接数据库；未设置 `DATABASE_URL` 会拒绝启动，绝不会退回临时磁盘保存库存。数据库表在第一次成功启动时自动创建。
 
@@ -58,6 +58,8 @@
 
 Node.js 22.13或更新版本。`npm ci` 安装依赖，`npm test` 启动仅监听127.0.0.1的临时 PostgreSQL 数据库并运行域模型和云端检查。测试数据位于忽略提交的 `test-results/`。本地开发需要设置测试数据库连接串和 `ALLOW_LOCAL_DATABASE=true`；公网数据库始终校验证书。
 
-当前已通过54项自动检查，包括真实PostgreSQL读写、两连接并发、注入写入失败后的回滚、跨库原子性、HTTP实时事件、BOM/全选最终扣账、旧库迁移、注册登录重启持久化和退出持久化。另通过页面事件模拟，核对账号/库缓存隔离及免费服务启动失败时的快照保留。原本地多人版的53项检查仍独立保留。
+当前已通过56项自动检查，包括真实PostgreSQL读写、两连接并发、注入写入失败后的回滚、跨库原子性、HTTP实时事件、BOM/全选最终扣账、旧库迁移、注册登录重启持久化和退出持久化。另通过页面事件模拟，核对账号/库缓存隔离及免费服务启动失败时的快照保留。原本地多人版的53项检查仍独立保留。
 
 另已使用本地隔离数据库完成真实 Edge 浏览器的手机尺寸与电脑尺寸检查，包括登录、损耗、整批扣账、恢复码生成和版本查询。此检查不代表 Neon 线上部署、Linux容器构建或Android真机验收已完成；需要在Render首次部署后查看构建结果并用电脑/手机各登录一个账号完成联机验收。
+
+本次新增 APP 内升级与所有者协助找回账号，详见 RELEASE-2.2.1.md。旧 APK 需要先手动覆盖安装本版，后续更高版本可在 APP 内更新。
