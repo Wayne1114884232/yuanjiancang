@@ -13,7 +13,7 @@ const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const int=(n,min,max)=>Number.isSafeInteger(Number(n))&&Number(n)>=min&&Number(n)<=max;
 const rank={readonly:0,member:1,admin:2,owner:3};
 const globalActions=new Set(['parts.bulkUpdate','location.save','settings.save']);
-const allowedActions=new Set(['part.save','parts.bulkUpdate','location.save','settings.save','stock.post','stock.batch','stock.bulkPost','bom.post','project.save','project.reserve','project.release','project.issue','procurement.bulkAdd','procurement.save','procurement.receive','procurement.cancel','usage.record','substitution.save','container.save','container.assign','container.stocktake','finishedGood.post','stock.transfer','order.undo','price.record','library.restore']);
+const allowedActions=new Set(['label.receive','part.save','parts.bulkUpdate','location.save','settings.save','stock.post','stock.batch','stock.bulkPost','bom.post','project.save','project.reserve','project.release','project.issue','procurement.bulkAdd','procurement.save','procurement.receive','procurement.cancel','usage.record','substitution.save','container.save','container.assign','container.stocktake','finishedGood.post','stock.transfer','order.undo','price.record','library.restore']);
 
 export const emptyDocument=()=>({schema:2,revision:0,users:[],sessions:[],libraries:[],members:[],invites:[],requests:[],shares:[],approvals:[],audit:[],transfers:[],migrations:[],receipts:[]});
 export class TeamEngine {

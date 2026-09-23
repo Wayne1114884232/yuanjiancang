@@ -1,3 +1,4 @@
+import {labelPartConflicts} from './public/logic.js';
 import { randomUUID } from 'node:crypto';
 
 export const categories = ['电容','电阻','电感','二极管','三极管','MOS管','IC','连接器','其他'];
@@ -45,16 +46,16 @@ function normalizeBomDraft(raw={}) {
   const tolerance=clean(raw.tolerance)||((value.match(/(?:±|\+\/\-)?\s*(0\.1|0\.5|1|2|5|10|20)\s*%/)||[])[1]||''); const voltage=clean(raw.voltage)||((value.match(/\b\d+(?:\.\d+)?\s*[kKmM]?V\b/i)||[])[0]||'');
   return normalizePart({...raw,sku,name,category,mount,package:packageName,value,tolerance,voltage,minStock:0,watch:false,description:clean(raw.description)||`BOM 导入自动建档${raw.reference?`；位号：${clean(raw.reference)}`:''}`});
 }
-function postOrder(s, {type, note='', boards=1, source='手动', lines, requestId, projectId='', procurementItemId=''}) {
+function postOrder(s, {type, note='', boards=1, source='手动', lines, requestId, projectId='', procurementItemId='',lotCode='',supplier='',labelText=''}) {
   assert(Array.isArray(lines)&&lines.length>0&&lines.length<=1000,'请选择至少一个元件，单批最多1000行');
   const aggregate=new Map();
   for (const line of lines) { assert(s.stocks.some(x=>x.id===line.stockId),'库位不存在'); assert(Number.isSafeInteger(line.delta),'数量必须为整数'); const a=aggregate.get(line.stockId)||0; aggregate.set(line.stockId,a+line.delta); }
   for (const [stockId,delta] of aggregate) { const st=s.stocks.find(x=>x.id===stockId); const p=s.parts.find(x=>x.id===st.partId); assert(st.qty+delta>=0,`${p.sku} 库存不足：需 ${-delta}，现有 ${st.qty}，整单未提交`); assert(Number.isSafeInteger(st.qty+delta)&&st.qty+delta<=1e9,'库存数量超出范围'); }
-  const order={id:id(),time:now(),type,note:clean(note,2000),boards,source:clean(source),lines:copy(lines),requestId:clean(requestId),projectId:clean(projectId),procurementItemId:clean(procurementItemId),undoneBy:null};
+  const order={id:id(),time:now(),type,note:clean(note,2000),lotCode:clean(lotCode,300),supplier:clean(supplier,300),labelText:clean(labelText,6000),boards,source:clean(source),lines:copy(lines),requestId:clean(requestId),projectId:clean(projectId),procurementItemId:clean(procurementItemId),undoneBy:null};
   for (const [stockId,delta] of aggregate) {
     if (!delta) continue;
     const stock=s.stocks.find(x=>x.id===stockId); const before=stock.qty; stock.qty+=delta;
-    s.events.push({id:id(),orderId:order.id,time:order.time,stockId,partId:stock.partId,locationId:stock.locationId,bin:stock.bin,before,delta,after:stock.qty,type,note:order.note});
+    s.events.push({id:id(),orderId:order.id,time:order.time,stockId,partId:stock.partId,locationId:stock.locationId,bin:stock.bin,before,delta,after:stock.qty,type,note:order.note,lotCode:order.lotCode,supplier:order.supplier});
   }
   s.orders.push(order); return order;
 }
@@ -77,7 +78,14 @@ function allocatePart(s,partId,qty,preferredLocationId=''){
 function validDate(value,label){const v=clean(value,80);if(v)assert(Number.isFinite(Date.parse(v)),`${label}格式无效`);return v;}
 export function applyAction(original, action) {
   const s=copy(original); const result={};
-  if(action.type==='stock.batch') {
+  if(action.type==='label.receive') {
+    integer(action.qty,'入库数量',1);const p=action.part;assert(p&&typeof p==='object','请核对标签参数');
+    if(['电阻','电容','电感'].includes(p.category))assert(clean(p.value)&&clean(p.package),'请填写标称值与封装');
+    let stock,partId;
+    if(action.partId){const existing=s.parts.find(x=>x.id===action.partId);assert(existing,'所选元件不存在');const conflicts=labelPartConflicts(p,existing);assert(!conflicts.length,'标签参数与已有元件不符：'+conflicts.join('；'));partId=existing.id;stock=findStock(s,partId,action.locationId,action.bin);}
+    else{const created=normalizePart(p);assert(!s.parts.some(x=>x.sku.toLowerCase()===created.sku.toLowerCase()),'编号已存在，请选择已有元件核对或修改编号');s.parts.push(created);partId=created.id;stock=findStock(s,partId,action.locationId,action.bin);}
+    result.order=postOrder(s,{type:'入库',source:'标签核对入库',note:action.note,lotCode:action.lotCode,supplier:action.supplier,labelText:action.labelText,lines:[{stockId:stock.id,delta:Number(action.qty),base:Number(action.qty),loss:0}],requestId:action.requestId});result.partId=partId;
+  } else if(action.type==='stock.batch') {
     assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'请选择1～1000笔记录');
     let next=s;const orders=[];
     for(const row of action.rows){
@@ -218,7 +226,7 @@ export function validateBackup(raw) {
   s.parts=s.parts.map(p=>({...normalizePart(p,p),updatedAt:p.updatedAt||p.createdAt||now()})); assert(new Set(s.parts.map(p=>p.sku.toLowerCase())).size===s.parts.length,'备份包含重复元件编号');
   const stockKeys=new Set();
   for (const st of s.stocks) { integer(st.qty,'备份库存'); assert(s.parts.some(p=>p.id===st.partId)&&s.locations.some(l=>l.id===st.locationId),'备份库位关联无效'); assert(typeof st.bin==='string','备份库位格式无效'); const key=JSON.stringify([st.partId,st.locationId,st.bin]); assert(!stockKeys.has(key),'备份包含重复库位');stockKeys.add(key); }
-  for (const o of s.orders) { assert(['入库','出库','损耗','盘点','调拨','撤销'].includes(o.type),'流水类型无效'); assert(Array.isArray(o.lines)&&o.lines.length>0,'流水批次无效'); for (const l of o.lines) assert(s.stocks.some(st=>st.id===l.stockId)&&Number.isSafeInteger(l.delta),'流水数量或库位无效'); assert(Number.isFinite(Date.parse(o.time)),'流水时间无效');o.source=clean(o.source);o.note=clean(o.note,2000);if(o.undoneBy)assert(s.orders.some(x=>x.id===o.undoneBy&&x.type==='撤销'&&x.undoOf===o.id),'撤销关联无效'); }
+  for (const o of s.orders) { assert(['入库','出库','损耗','盘点','调拨','撤销'].includes(o.type),'流水类型无效'); assert(Array.isArray(o.lines)&&o.lines.length>0,'流水批次无效'); for (const l of o.lines) assert(s.stocks.some(st=>st.id===l.stockId)&&Number.isSafeInteger(l.delta),'流水数量或库位无效'); assert(Number.isFinite(Date.parse(o.time)),'流水时间无效');o.lotCode=clean(o.lotCode,300);o.supplier=clean(o.supplier,300);o.labelText=clean(o.labelText,6000);o.source=clean(o.source);o.note=clean(o.note,2000);if(o.undoneBy)assert(s.orders.some(x=>x.id===o.undoneBy&&x.type==='撤销'&&x.undoOf===o.id),'撤销关联无效'); }
   const ledger=new Map();
   for (const e of s.events) { const st=s.stocks.find(x=>x.id===e.stockId); assert(st&&st.partId===e.partId&&st.locationId===e.locationId&&st.bin===e.bin&&s.orders.some(o=>o.id===e.orderId),'备份流水关联无效');integer(e.before,'流水前数量');integer(e.after,'流水后数量'); assert(Number.isSafeInteger(e.delta)&&e.before+e.delta===e.after,'备份流水数量不平衡'); assert((ledger.get(e.stockId)??0)===e.before,'备份流水不连续');ledger.set(e.stockId,e.after); }
   for (const st of s.stocks) assert((ledger.get(st.id)??0)===st.qty,'备份库存与流水不一致');
