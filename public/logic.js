@@ -146,8 +146,14 @@ export function projectDiff(project,previous,state){const before=new Map((previo
 function latestTierPrice(state,partId,qty){const prices=(state.observations||[]).filter(o=>o.partId===partId&&(['立创商城','LCSC 国际报价'].includes(o.source))&&o.kind!=='purchase'&&Number.isFinite(o.price)&&Number(o.quantityTier)>0).sort((a,b)=>Date.parse(b.asOf)-Date.parse(a.asOf));const newest=prices[0]?.asOf;if(!newest)return null;const tiers=prices.filter(o=>o.asOf===newest).map(o=>({...o,tier:Number(String(o.quantityTier).match(/\d+/)?.[0]||1)})).filter(o=>o.tier<=qty).sort((a,b)=>b.tier-a.tier);return tiers[0]||null;}
 export function projectCostEstimate(project,state,boards=1,rate=0){const analysis=projectAnalysis(project,state,boards,rate),quote=new Map(),actual=new Map(),unknownQuote=[],unknownActual=[];for(const line of analysis.lines){const current=latestTierPrice(state,line.partId,line.required),history=(state.observations||[]).filter(o=>o.partId===line.partId&&o.kind==='purchase'&&Number.isFinite(o.price)).sort((a,b)=>Date.parse(b.asOf)-Date.parse(a.asOf))[0];if(current)quote.set(current.currency,(quote.get(current.currency)||0)+current.price*line.required);else unknownQuote.push(line.partId);if(history)actual.set(history.currency,(actual.get(history.currency)||0)+history.price*line.required);else unknownActual.push(line.partId);}return {quote:[...quote].map(([currency,total])=>({currency,total})),actual:[...actual].map(([currency,total])=>({currency,total})),unknownQuote,unknownActual};}
 export function procurementSuggestions(state,project=null,boards=1,rate=0){const projectNeeds=new Map();if(project)for(const line of projectAnalysis(project,state,boards,rate).lines)if(line.shortage)projectNeeds.set(line.partId,line.shortage);return state.parts.map(part=>{const physical=state.stocks.filter(s=>s.partId===part.id).reduce((n,s)=>n+s.qty,0),reserved=(state.reservations||[]).filter(r=>r.partId===part.id).reduce((n,r)=>n+r.qty,0),available=Math.max(0,physical-reserved),safety=Math.max(0,(part.minStock||0)-available),projectShortage=projectNeeds.get(part.id)||0,required=Math.max(safety,projectShortage),outstanding=(state.procurementItems||[]).filter(x=>x.partId===part.id&&!['received','cancelled'].includes(x.status)).reduce((n,x)=>n+Math.max(0,(x.orderedQty||0)-(x.receivedQty||0)),0),raw=Math.max(0,required-outstanding),existing=(state.procurementItems||[]).find(x=>x.partId===part.id&&!['received','cancelled'].includes(x.status)),moq=existing?.moq||1,pack=existing?.packMultiple||1,suggested=raw?Math.max(moq,Math.ceil(raw/pack)*pack):0,quote=latestTierPrice(state,part.id,Math.max(1,suggested));return {part,physical,reserved,available,safety,projectShortage,required,outstanding,suggested,quote};}).filter(x=>x.required||x.outstanding);}
+export function normalizeOcrLabelText(text) {
+ return String(text||'').normalize('NFKC').replace(/\r/g,'').replace(/[．。·•⋅]/g,'.').replace(/[％﹪]/g,'%').replace(/[，]/g,',').replace(/[：]/g,':')
+   .replace(/Q\s*T\s*Y/gi,'QTY').replace(/T\s*O\s*L/gi,'TOL')
+   .replace(/(\d)[ \t]*[.][ \t]*(\d)/g,'$1.$2').replace(/(\d)[ \t]+(?=[kKmM](?:Ω|ohm)?\b)/g,'$1').replace(/(\d)[ \t]+(?=%)/g,'$1').replace(/μ/g,'µ')
+   .replace(/(\d)[ \t]*([pnuµmkM])[ \t]*([fFhH])\b/gi,(_,n,p,u)=>n+(/[PNU]/.test(p)?p.toLowerCase():p)+u.toUpperCase());
+}
 export function extractLabel(text) {
- const source=String(text||''),s=source.normalize('NFKC').replace(/\r/g,'').replace(/μ/g,'µ'),warnings=[];
+ const source=String(text||''),s=normalizeOcrLabelText(source),warnings=[];
  const keys={sku:'M\\s*P\\s*N|P\\s*\\/\\s*N|Part\\s*(?:No\\.?|Number)|型号|料号',value:'阻值|电阻值|容量|容值|电感值|Resistance|Capacitance|Inductance|Value',package:'封装|Package|Footprint',tolerance:'精度|误差|Tolerance|Tol',qty:'数量|数目|Q\\s*T\\s*Y|Quantity',manufacturer:'品牌|制造商|厂家|厂商|Brand|Manufacturer|MFR',lotCode:'批次号?|批号|生产批次|Lot(?:\\s*(?:No\\.?|Number))?|Batch(?:\\s*(?:No\\.?|Number))?',voltage:'耐压|额定电压|Voltage',power:'功率|Power',dielectric:'介质|Dielectric',supplier:'供应商|卖家|店铺|Supplier|Seller'};
  const all=Object.entries(keys).map(([k,v])=>`(?<${k}>${v})`).join('|'),re=new RegExp(`(?<![A-Za-z\\u4e00-\\u9fff])(?:${all})(?=[\\s:：=#]|(?<=[\\u4e00-\\u9fff]))\\s*[:：=#]?\\s*`,'gi'),marks=[...s.matchAll(re)],tagged={};
  for(let i=0;i<marks.length;i++){const m=marks[i],key=Object.keys(m.groups).find(k=>m.groups[k]!==undefined);let v=s.slice(m.index+m[0].length,marks[i+1]?.index??s.length).split(/[\n;；|，]/)[0].replace(/[,\s]+$/,'').trim();if(v)(tagged[key]??=[]).push(v);}
@@ -156,13 +162,15 @@ export function extractLabel(text) {
  const taggedOne=(key,label)=>choose(label,tagged[key]||[]);
  let sku=taggedOne('sku','型号').replace(/\s+/g,'');
  if(!sku)sku=choose('型号',s.split('\n').map(x=>x.trim()).filter(x=>/^[A-Z]{2,}\d[A-Z0-9._/+\-]{2,40}$/i.test(x)&&!/^(QTY|LOT|DATE|BATCH)/i.test(x)));
- const pkg=choose('封装',tagged.package||scan(/(?:^|[^A-Za-z0-9])(0201|0402|0603|0805|1206|1210|1812|2010|2512|SOT[- ]?\d+(?:-\d+)?|SOIC[- ]?\d+|SOP[- ]?\d+|LQFP[- ]?\d+|QFN[- ]?\d+|DIP[- ]?\d+|SMA|SMB)(?![A-Za-z0-9])/gi),v=>v.trim().toUpperCase());
+ const excluded=new Set(['manufacturer','lotCode','supplier','sku']);let coreSource='',cursor=0;for(let i=0;i<marks.length;i++){const m=marks[i],key=Object.keys(m.groups).find(k=>m.groups[k]!==undefined);if(!excluded.has(key))continue;const tail=s.slice(m.index+m[0].length,marks[i+1]?.index??s.length),stop=tail.search(/[\n,;]/),end=m.index+m[0].length+(stop<0?tail.length:stop);coreSource+=s.slice(cursor,m.index)+' ';cursor=end;}coreSource+=s.slice(cursor);
+ const packageSource=coreSource.replace(/(?<![\d.])([0128])[ \t]+([0124568])[ \t]+([0125])[ \t]+([0123568])(?![\d.])/g,'$1$2$3$4');
+ const pkg=choose('封装',scan(/(?:^|[^A-Za-z0-9])(0201|0402|0603|0805|1206|1210|1812|2010|2512|SOT[- ]?\d+(?:-\d+)?|SOIC[- ]?\d+|SOP[- ]?\d+|LQFP[- ]?\d+|QFN[- ]?\d+|DIP[- ]?\d+|SMA|SMB)(?![A-Za-z0-9])/gi,packageSource),v=>v.replace(/\s+/g,'').trim().toUpperCase());
  // Units or an explicit parameter label are required; bare 104/472 and colour bands are not guessed.
- let candidates=tagged.value||scan(/(?:^|[^A-Za-z0-9.])(\d+(?:\.\d+)?\s*(?:[pnuµmkM]?[FfHh]|[kKMm]?(?:Ω|ω|ohms?|欧姆)|[kKM](?:Ω)?|[RrKkMm]\d+))(?![A-Za-z0-9.%])/g);
+ let candidates=scan(/(?:^|[^A-Za-z0-9.])(\d+(?:\.\d+)?\s*(?:[pnuµmkM]?[FfHh]|[kKMm]?(?:Ω|ω|ohms?|欧姆)|[kKM](?:Ω)?|[RrKkMm]\d+))(?![A-Za-z0-9.%])/g,coreSource);
  const electrical=v=>{v=v.replace(/欧姆|ohms?/gi,'Ω').replace(/ω/g,'Ω').replace(/\s+/g,'').replace(/([PNU])([FH])$/g,(_,a,b)=>a.toLowerCase()+b).replace(/µ/g,'u');const p=parseElectricalValue(v,'R');if(!p)return '';return p.kind==='R'?(p.base>=1e6?`${p.base/1e6}MΩ`:p.base>=1e3?`${p.base/1e3}kΩ`:`${p.base}Ω`):v.replace(/u/g,'µ');};
  const value=choose('标称值',candidates,electrical);if((tagged.value||[]).some(v=>!electrical(v)))warnings.push('标称值缺少可靠单位或编码含义，请手工核对');
- const tol=choose('精度',tagged.tolerance||scan(/(?:±|\+\/-)?\s*(\d+(?:\.\d+)?)\s*%/g),v=>{const m=v.match(/^(?:±|\+\/-)?\s*(\d+(?:\.\d+)?)(?:\s*%|$)/);return m&&Number(m[1])<=100?m[1]:'';});
- const qtyValues=(tagged.qty||scan(/(?:^|[^\d.])(\d[\d,]*(?:\.\d+)?\s*(?:pcs|pieces|个|颗|只))(?![A-Za-z])/gi));
+ const tol=choose('精度',[...scan(/(?:±|\+\/-)?\s*(\d+(?:\.\d+)?)\s*%/g,coreSource),...(tagged.tolerance||[]).filter(v=>/^\d+(?:\.\d+)?$/.test(v))],v=>{const m=v.match(/^(?:±|\+\/-)?\s*(\d+(?:\.\d+)?)(?:\s*%|$)/);return m&&Number(m[1])<=100?m[1]:'';});
+ const qtyValues=[...(tagged.qty||[]),...scan(/(?:^|[^\d.])(\d[\d,]*(?:\.\d+)?\s*(?:pcs|pieces|个|颗|只))(?![A-Za-z])/gi,coreSource)];
  const qty=choose('数量',qtyValues,v=>{const m=v.match(/^(\d[\d,]*)(?:\s*(?:pcs|pieces|个|颗|只))?\s*$/i);if(!m)return '';const n=Number(m[1].replace(/,/g,''));return Number.isSafeInteger(n)&&n>0&&n<=1e9?String(n):'';});
  if(qtyValues.length&&!qty)warnings.push('数量无法确定，请填写本次实际入库个数；不会按包数或盘数猜测');
  const voltage=choose('耐压',tagged.voltage||scan(/(?:^|[^A-Za-z0-9.])(\d+(?:\.\d+)?\s*[vV])(?![A-Za-z])/g),v=>/^\d+(?:\.\d+)?\s*V$/i.test(v)?v.replace(/\s/g,'').toUpperCase():'');
@@ -170,7 +178,18 @@ export function extractLabel(text) {
  const material=choose('介质',tagged.dielectric||scan(/\b(C0G|NP0|X7R|X5R|Y5V|Z5U)\b/gi),v=>v.toUpperCase().replace('NP0','C0G'));
  const parsed=parseElectricalValue(value,'R');let category=parsed?{R:'电阻',C:'电容',L:'电感'}[parsed.kind]:/电阻|resistor/i.test(s)?'电阻':/电容|capacitor/i.test(s)?'电容':/电感|inductor/i.test(s)?'电感':sku?'IC':'其他';
  if(!value)warnings.push('未确定阻值/容量等标称值，请核对原图');if(!qty)warnings.push('未确定数量，请填写本次实际个数');
- return {sku,name:sku||[value,category!=='其他'?category:''].filter(Boolean).join(' '),package:pkg,value,tolerance:tol,voltage,power,dielectric:material,qty,manufacturer:taggedOne('manufacturer','品牌'),lotCode:taggedOne('lotCode','批次'),supplier:taggedOne('supplier','供应商'),category,mount:/DIP|轴向|径向|插件/i.test(pkg+' '+s)?'插件':'贴片',description:source,warnings:[...new Set(warnings)]};
+ const fieldWarnings=[];if(['电阻','电容','电感'].includes(category)){if(!value)fieldWarnings.push('阻值/容量');if(!tol)fieldWarnings.push('精度');if(!pkg)fieldWarnings.push('封装');}
+ if(fieldWarnings.length)warnings.push(`关键字段未可靠识别：${fieldWarnings.join('、')}；请在确认前手工填写`);
+ return {sku,name:sku||[value,category!=='其他'?category:''].filter(Boolean).join(' '),package:pkg,value,tolerance:tol,voltage,power,dielectric:material,qty,manufacturer:taggedOne('manufacturer','品牌'),lotCode:taggedOne('lotCode','批次'),supplier:taggedOne('supplier','供应商'),category,mount:/DIP|轴向|径向|插件/i.test(pkg+' '+s)?'插件':'贴片',description:source,warnings:[...new Set(warnings)],fieldWarnings};
+}
+export function extractPhotoLabel(text){
+ const p=extractLabel(text);
+ // Free-form metadata is not reliable enough to create automatic identity fields from photos.
+ p.manufacturer='';p.lotCode='';p.supplier='';
+ if(['电阻','电容','电感'].includes(p.category)){p.sku='';p.name=[p.value,p.category].filter(Boolean).join(' ');}
+ else if(!/(?:型号|料号|MPN|P\/N|Part No)\s*[:：]/i.test(text)){p.sku='';p.name='';if(p.category==='IC')p.category='其他';}
+ p.warnings=p.warnings.filter(x=>!/^品牌|^批次|^供应商/.test(x));
+ return p;
 }
 export function labelPartConflicts(label,existing){
  const explicitSku=label.labelSku??label.sku;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {extractLabel,labelSuggestedSku,labelPartConflicts} from '../public/logic.js';
+import {extractLabel,extractPhotoLabel,labelSuggestedSku,labelPartConflicts,normalizeOcrLabelText} from '../public/logic.js';
 import {emptyState,applyAction,validateBackup} from '../domain.mjs';
 import {TeamEngine,emptyDocument} from '../team-engine.mjs';
 import {randomUUID} from 'node:crypto';
@@ -31,6 +31,21 @@ test('English field names cannot split manufacturer or model values; explicit di
  let s=emptyState();s=applyAction(s,{type:'part.save',part:{sku:'IC-A',name:'A',category:'IC',mount:'贴片'},locationId:s.locations[0].id,qty:0}).state;
  assert.throws(()=>applyAction(s,{type:'label.receive',partId:s.parts[0].id,part:{sku:'IC-B'},locationId:s.locations[0].id,qty:100}),/型号/);
  assert.equal(s.stocks[0].qty,0);
+});
+test('OCR spacing and full-width punctuation are repaired for the three critical fields',()=>{
+ const p=extractLabel('阻值 4 ． 7 K\n精度 1 ％\n封装 0 4 0 2\n数量 100');
+ assert.equal(normalizeOcrLabelText('4 ． 7 K 1 ％'),'4.7K 1%');
+ assert.equal(p.value,'4.7kΩ');assert.equal(p.tolerance,'1');assert.equal(p.package,'0402');assert.equal(p.qty,'100');
+ assert.equal(extractLabel('Value. 4 · 7K\nTolerance. 1 ％\nPackage. 0402\nQTY:100').value,'4.7kΩ');
+});
+test('photo parameters take precedence over unreliable identity metadata and packed headings',()=>{
+ const p=extractPhotoLabel('封装:0402 4.7K ±1% 100pcs\nBrand: noise\nLOT: 0805\nSupplier: unknown');
+ assert.equal(p.value,'4.7kΩ');assert.equal(p.package,'0402');assert.equal(p.tolerance,'1');assert.equal(p.qty,'100');
+ for(const key of ['sku','manufacturer','lotCode','supplier'])assert.equal(p[key],'');
+ const q=extractPhotoLabel('电容 0.1uF ±10% 0603 50V X7R\n批号0805');assert.equal(q.value,'0.1µF');assert.equal(q.package,'0603');assert.equal(q.tolerance,'10');
+ assert.equal(extractPhotoLabel('MPN: STM32G431CBT6\nPackage: LQFP-48').sku,'STM32G431CBT6');
+ const conflict=extractPhotoLabel('4.7K 0402 1%\n10K 0603 5%');assert.equal(conflict.value,'');assert.equal(conflict.package,'');assert.equal(conflict.tolerance,'');
+ const metadataFirst=extractLabel('品牌风华 阻值4.7K 精度1% 封装0402');assert.equal(metadataFirst.value,'4.7kΩ');
 });
 test('label stock posting is atomic, does not require LCSC, and keeps each receiving lot in ledger and backup',()=>{
  let s=emptyState();const p=extractLabel('阻值4.7K 精度1% 数量100 封装0402 品牌xxx 批次A');p.sku=labelSuggestedSku(p);

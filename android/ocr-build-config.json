@@ -1,0 +1,10 @@
+{
+  "dependency": "com.google.mlkit:text-recognition-chinese:16.0.1",
+  "minSdkVersion": 23,
+  "abiFilters": [
+    "arm64-v8a",
+    "armeabi-v7a"
+  ],
+  "reason": "Bundled model and ARM-only APK under existing updater 32 MiB limit",
+  "maxApkBytes": 33554432
+}

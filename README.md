@@ -1,4 +1,4 @@
-# 元件仓 · 免费云端试用版 2.2.2
+# 元件仓 · 免费云端试用版 2.2.3
 
 手机 APK、电脑浏览器和其他成员连接同一个 HTTPS 云服务，已提交库存保存在 Neon PostgreSQL。电脑关机不影响云端库存操作。此仓库只包含程序、安装包和测试，不包含用户库存、数据库密码或 APK 签名私钥。
 
@@ -19,7 +19,7 @@
    | `PORT` | `10000` |
 
 5. 确认显示免费后，点击 **Deploy Web Service**。也可通过 **New → Blueprint** 读取 `render.yaml`，该文件已指定 `plan: free`，并要求在平台安全填写 `DATABASE_URL`。
-6. 等待状态为 **Live**，打开 Render 给出的 `https://…onrender.com` 地址。`/api/health` 应显示 `version: 2.2.2`、`mode: cloud-multiplayer`、`storage: postgresql`。
+6. 等待状态为 **Live**，打开 Render 给出的 `https://…onrender.com` 地址。`/api/health` 应显示 `version: 2.2.3`、`mode: cloud-multiplayer`、`storage: postgresql`。
 
 服务启动前必须连接数据库；未设置 `DATABASE_URL` 会拒绝启动，绝不会退回临时磁盘保存库存。数据库表在第一次成功启动时自动创建。
 
@@ -62,4 +62,4 @@ Node.js 22.13或更新版本。`npm ci` 安装依赖，`npm test` 启动仅监�
 
 另已使用本地隔离数据库完成真实 Edge 浏览器的手机尺寸与电脑尺寸检查，包括登录、损耗、整批扣账、恢复码生成和版本查询。此检查不代表 Neon 线上部署、Linux容器构建或Android真机验收已完成；需要在Render首次部署后查看构建结果并用电脑/手机各登录一个账号完成联机验收。
 
-本次优化通用标签拍照入库，详见 RELEASE-2.2.2.md。2.2.1 及以上 APK 可在设置中检查更新并覆盖安装。
+本次优化通用标签拍照入库，详见 RELEASE-2.2.3.md。2.2.1 及以上 APK 可在设置中检查更新并覆盖安装。
