@@ -1,4 +1,5 @@
 import {labelPartConflicts} from './public/logic.js';
+import {sortPickupStocks} from './public/workflows.js';
 import { randomUUID } from 'node:crypto';
 
 export const categories = ['电容','电阻','电感','二极管','三极管','MOS管','IC','连接器','其他'];
@@ -46,16 +47,17 @@ function normalizeBomDraft(raw={}) {
   const tolerance=clean(raw.tolerance)||((value.match(/(?:±|\+\/\-)?\s*(0\.1|0\.5|1|2|5|10|20)\s*%/)||[])[1]||''); const voltage=clean(raw.voltage)||((value.match(/\b\d+(?:\.\d+)?\s*[kKmM]?V\b/i)||[])[0]||'');
   return normalizePart({...raw,sku,name,category,mount,package:packageName,value,tolerance,voltage,minStock:0,watch:false,description:clean(raw.description)||`BOM 导入自动建档${raw.reference?`；位号：${clean(raw.reference)}`:''}`});
 }
-function postOrder(s, {type, note='', boards=1, source='手动', lines, requestId, projectId='', procurementItemId='',lotCode='',supplier='',labelText=''}) {
+function postOrder(s, {type, note='', boards=1, source='手动', lines, requestId, projectId='', procurementItemId='',lotCode='',supplier='',labelText='',time:requestedTime=''}) {
   assert(Array.isArray(lines)&&lines.length>0&&lines.length<=1000,'请选择至少一个元件，单批最多1000行');
   const aggregate=new Map();
   for (const line of lines) { assert(s.stocks.some(x=>x.id===line.stockId),'库位不存在'); assert(Number.isSafeInteger(line.delta),'数量必须为整数'); const a=aggregate.get(line.stockId)||0; aggregate.set(line.stockId,a+line.delta); }
   for (const [stockId,delta] of aggregate) { const st=s.stocks.find(x=>x.id===stockId); const p=s.parts.find(x=>x.id===st.partId); assert(st.qty+delta>=0,`${p.sku} 库存不足：需 ${-delta}，现有 ${st.qty}，整单未提交`); assert(Number.isSafeInteger(st.qty+delta)&&st.qty+delta<=1e9,'库存数量超出范围'); }
-  const order={id:id(),time:now(),type,note:clean(note,2000),lotCode:clean(lotCode,300),supplier:clean(supplier,300),labelText:clean(labelText,6000),boards,source:clean(source),lines:copy(lines),requestId:clean(requestId),projectId:clean(projectId),procurementItemId:clean(procurementItemId),undoneBy:null};
+  const recordedAt=now(),orderTime=requestedTime?receiptTime(requestedTime,recordedAt):recordedAt;
+  const order={id:id(),time:orderTime,recordedAt,type,note:clean(note,2000),lotCode:clean(lotCode,300),supplier:clean(supplier,300),labelText:clean(labelText,6000),boards,source:clean(source),lines:copy(lines),requestId:clean(requestId),projectId:clean(projectId),procurementItemId:clean(procurementItemId),undoneBy:null};
   for (const [stockId,delta] of aggregate) {
     if (!delta) continue;
     const stock=s.stocks.find(x=>x.id===stockId); const before=stock.qty; stock.qty+=delta;
-    s.events.push({id:id(),orderId:order.id,time:order.time,stockId,partId:stock.partId,locationId:stock.locationId,bin:stock.bin,before,delta,after:stock.qty,type,note:order.note,lotCode:order.lotCode,supplier:order.supplier});
+    s.events.push({id:id(),orderId:order.id,time:order.time,recordedAt,stockId,partId:stock.partId,locationId:stock.locationId,bin:stock.bin,before,delta,after:stock.qty,type,note:order.note,lotCode:order.lotCode,supplier:order.supplier});
   }
   s.orders.push(order); return order;
 }
@@ -71,11 +73,15 @@ function normalizeProject(s,raw,existing={}){
 }
 function releaseProjectReservations(s,projectId){s.reservations=s.reservations.filter(x=>x.projectId!==projectId);}
 function allocatePart(s,partId,qty,preferredLocationId=''){
-  const stocks=s.stocks.filter(x=>x.partId===partId&&x.qty>0).sort((a,b)=>(b.locationId===preferredLocationId)-(a.locationId===preferredLocationId)||b.qty-a.qty);const lines=[];let left=qty;
+  const stocks=sortPickupStocks(s,s.stocks.filter(x=>x.partId===partId&&x.qty>0),preferredLocationId);const lines=[];let left=qty;
   for(const stock of stocks){const take=Math.min(left,stock.qty);if(take){lines.push({stockId:stock.id,delta:-take,base:take,loss:0});left-=take;}if(!left)break;}
   assert(!left,`${s.parts.find(x=>x.id===partId)?.sku||'元件'} 库存不足`);return lines;
 }
 function validDate(value,label){const v=clean(value,80);if(v)assert(Number.isFinite(Date.parse(v)),`${label}格式无效`);return v;}
+function receiptTime(value,recordedAt){
+  assert(typeof value==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value),'入库时间须包含完整日期和时区');
+  const n=Date.parse(value);assert(Number.isFinite(n)&&n>=Date.parse('1970-01-01T00:00:00Z')&&n<=Date.parse(recordedAt)+300000,'入库时间无效或晚于当前时间');return new Date(n).toISOString();
+}
 export function applyAction(original, action) {
   const s=copy(original); const result={};
   if(action.type==='label.receive') {
@@ -84,7 +90,7 @@ export function applyAction(original, action) {
     let stock,partId;
     if(action.partId){const existing=s.parts.find(x=>x.id===action.partId);assert(existing,'所选元件不存在');const conflicts=labelPartConflicts(p,existing);assert(!conflicts.length,'标签参数与已有元件不符：'+conflicts.join('；'));partId=existing.id;stock=findStock(s,partId,action.locationId,action.bin);}
     else{const created=normalizePart(p);assert(!s.parts.some(x=>x.sku.toLowerCase()===created.sku.toLowerCase()),'编号已存在，请选择已有元件核对或修改编号');s.parts.push(created);partId=created.id;stock=findStock(s,partId,action.locationId,action.bin);}
-    result.order=postOrder(s,{type:'入库',source:'标签核对入库',note:action.note,lotCode:action.lotCode,supplier:action.supplier,labelText:action.labelText,lines:[{stockId:stock.id,delta:Number(action.qty),base:Number(action.qty),loss:0}],requestId:action.requestId});result.partId=partId;
+    result.order=postOrder(s,{type:'入库',source:'标签核对入库',note:action.note,lotCode:action.lotCode,supplier:action.supplier,labelText:action.labelText,time:action.time,lines:[{stockId:stock.id,delta:Number(action.qty),base:Number(action.qty),loss:0}],requestId:action.requestId});result.partId=partId;
   } else if(action.type==='stock.batch') {
     assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'请选择1～1000笔记录');
     let next=s;const orders=[];
@@ -92,7 +98,7 @@ export function applyAction(original, action) {
       assert(['入库','出库','损耗','盘点'].includes(row.kind),'批量记录类型无效');
       const st=next.stocks.find(x=>x.id===row.stockId);assert(st,'库位不存在');
       if(row.kind==='盘点')assert(Number(row.snapshotQty)===st.qty,'盘点基准已变化，请重新核对该库位');
-      const out=applyAction(next,{type:'stock.post',stockId:row.stockId,kind:row.kind,qty:row.qty,boards:row.boards??1,loss:row.loss??0,note:row.note||action.note,requestId:action.requestId});next=out.state;orders.push(out.order);
+      const out=applyAction(next,{type:'stock.post',stockId:row.stockId,kind:row.kind,qty:row.qty,boards:row.boards??1,loss:row.loss??0,note:row.note||action.note,time:row.time||action.time,requestId:action.requestId});next=out.state;orders.push(out.order);
     }
     next.rev=original.rev+1;return {state:next,orders};
   } else if (action.type==='part.save') {
@@ -102,7 +108,7 @@ export function applyAction(original, action) {
     if (existing) s.parts[s.parts.findIndex(x=>x.id===p.id)]=p; else s.parts.push(p);
     if (!existing && !action.skipStock) {
       const stock=findStock(s,p.id,action.locationId,action.bin); const qty=integer(action.qty??0,'初始数量');
-      if (qty) postOrder(s,{type:'入库',source:'新建元件',note:'初始入库',lines:[{stockId:stock.id,delta:qty,base:qty,loss:0}],requestId:action.requestId});
+      if (qty) postOrder(s,{type:'入库',source:'新建元件',note:'初始入库',time:action.time,lines:[{stockId:stock.id,delta:qty,base:qty,loss:0}],requestId:action.requestId});
     } result.partId=p.id;
   } else if(action.type==='parts.bulkUpdate'){
     assert(Array.isArray(action.updates)&&action.updates.length>0&&action.updates.length<=1000,'请选择1～1000条元件');
@@ -125,11 +131,11 @@ export function applyAction(original, action) {
     const base=action.kind==='出库'?qty*boards:qty; integer(base,'总用量');
     const delta=action.kind==='入库'?base:action.kind==='盘点'?qty-stock.qty:-(base+loss);
     assert(delta!==0,'盘点数量与现有库存相同，无需调整');
-    result.order=postOrder(s,{type:action.kind,note:action.note,boards,lines:[{stockId:stock.id,delta,base,loss}],requestId:action.requestId});
+    result.order=postOrder(s,{type:action.kind,note:action.note,boards,time:action.time,lines:[{stockId:stock.id,delta,base,loss}],requestId:action.requestId});
   } else if (action.type==='stock.bulkPost') {
     assert(['出库','损耗'].includes(action.kind),'批量操作支持出库或损耗'); assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'请选择至少一个库存库位，单批最多1000个');
     const lines=action.rows.map(row=>{const stock=s.stocks.find(x=>x.id===row.stockId);assert(stock,'批量出库包含不存在的库位');const qty=integer(row.qty,'出库数量',1);assert(stock.qty>=qty,`${s.parts.find(p=>p.id===stock.partId)?.sku||'元件'} 库存不足：需 ${qty}，现有 ${stock.qty}，整批未提交`);return {stockId:stock.id,delta:-qty,base:qty,loss:0};});
-    result.order=postOrder(s,{type:action.kind,note:action.note,source:action.kind==='损耗'?'批量损耗':'批量出库',lines,requestId:action.requestId});
+    result.order=postOrder(s,{type:action.kind,note:action.note,time:action.time,source:action.kind==='损耗'?'批量损耗':'批量出库',lines,requestId:action.requestId});
   } else if (action.type==='bom.post') {
     assert(['入库','出库'].includes(action.kind),'BOM方向无效'); const boards=integer(action.boards,'板数',1); const rate=decimal(action.lossRate??0,'损耗率',0,100);
     assert(Array.isArray(action.rows)&&action.rows.length>0&&action.rows.length<=1000,'BOM必须包含1～1000行');
@@ -147,7 +153,7 @@ export function applyAction(original, action) {
       const perBoard=integer(row.perBoard,'每板用量',1); const base=perBoard*boards; integer(base,'BOM总用量'); const loss=action.kind==='出库'?Math.ceil(base*rate/100)+integer(row.loss??0,'手动损耗'):0;
       return {stockId:stock.id,delta:action.kind==='入库'?base:-(base+loss),perBoard,base,loss,reference:clean(row.reference,500)};
     });
-    result.order=postOrder(s,{type:action.kind,note:action.note,boards,source:'BOM',lines,requestId:action.requestId});
+    result.order=postOrder(s,{type:action.kind,note:action.note,boards,time:action.time,source:'BOM',lines,requestId:action.requestId});
   } else if(action.type==='project.save'){
     const existing=action.project?.id?s.projects.find(x=>x.id===action.project.id):undefined;assert(!action.project?.id||existing,'项目不存在');const raw=copy(action.project);const rows=raw.rows;
     assert(Array.isArray(rows)&&rows.length>0&&rows.length<=1000,'项目BOM必须包含1～1000行');
@@ -170,7 +176,7 @@ export function applyAction(original, action) {
   } else if(action.type==='project.issue'){
     const project=s.projects.find(x=>x.id===action.projectId);assert(project,'项目不存在');const boards=integer(action.boards,'领料板数',1),rate=decimal(action.lossRate??project.lossRate??0,'损耗率',0,100),all=[];
     for(const row of project.rows){const base=row.perBoard*boards,loss=Math.ceil(base*rate/100)+row.loss,qty=base+loss;assert(partTotal(s,row.partId)-reservedTotal(s,row.partId,project.id)>=qty,`${s.parts.find(x=>x.id===row.partId)?.sku} 可用库存不足`);const allocated=allocatePart(s,row.partId,qty,action.locationId);let remainingLoss=loss;for(const line of allocated){line.loss=Math.min(remainingLoss,-line.delta);line.base=-line.delta-line.loss;remainingLoss-=line.loss;}all.push(...allocated);}
-    result.order=postOrder(s,{type:'出库',note:action.note||`${project.name} ${project.version}`.trim(),boards,source:'项目BOM',lines:all,requestId:action.requestId,projectId:project.id});
+    result.order=postOrder(s,{type:'出库',note:action.note||`${project.name} ${project.version}`.trim(),boards,time:action.time,source:'项目BOM',lines:all,requestId:action.requestId,projectId:project.id});
     for(const row of project.rows){let consume=row.perBoard*boards+Math.ceil(row.perBoard*boards*rate/100)+row.loss;for(const r of s.reservations.filter(x=>x.projectId===project.id&&x.partId===row.partId)){const used=Math.min(consume,r.qty);r.qty-=used;consume-=used;}s.reservations=s.reservations.filter(x=>x.qty>0);}project.updatedAt=now();
   } else if(action.type==='procurement.bulkAdd'){
     assert(Array.isArray(action.items)&&action.items.length>0&&action.items.length<=1000,'采购清单必须包含1～1000项');for(const raw of action.items){assert(s.parts.some(x=>x.id===raw.partId),'采购元件不存在');if(raw.projectId)assert(s.projects.some(x=>x.id===raw.projectId),'采购项目不存在');const qty=integer(raw.requiredQty,'需求数量',1);let item=s.procurementItems.find(x=>x.partId===raw.partId&&x.projectId===clean(raw.projectId)&&!['received','cancelled'].includes(x.status));if(item){item.requiredQty=Math.max(item.requiredQty,qty);item.updatedAt=now();}else{s.procurementItems.push({id:id(),partId:raw.partId,projectId:clean(raw.projectId),needType:raw.projectId?'project':'manual',requiredQty:qty,orderedQty:0,receivedQty:0,moq:1,packMultiple:1,supplier:'立创商城',expectedAt:'',actualUnitPrice:null,currency:'CNY',note:clean(raw.note,1000),status:'needed',createdAt:now(),updatedAt:now()});}}result.updated=action.items.length;
@@ -179,7 +185,7 @@ export function applyAction(original, action) {
     const item={...existing,id:existing?.id||id(),partId:raw.partId,projectId:clean(raw.projectId),needType:['project','safety','manual'].includes(raw.needType)?raw.needType:'manual',requiredQty:integer(raw.requiredQty??0,'需求数量'),orderedQty:integer(raw.orderedQty??0,'下单数量'),receivedQty:existing?.receivedQty??integer(raw.receivedQty??0,'已到货数量'),moq:integer(raw.moq??1,'最小起订量',1),packMultiple:integer(raw.packMultiple??1,'包装倍数',1),supplier:clean(raw.supplier||'立创商城',200),expectedAt:validDate(raw.expectedAt,'预计到货时间'),actualUnitPrice:raw.actualUnitPrice===''||raw.actualUnitPrice==null?null:decimal(raw.actualUnitPrice,'实际采购单价',0),currency:clean(raw.currency||'CNY'),note:clean(raw.note,1000),status:['needed','ordered','partial','received','cancelled'].includes(raw.status)?raw.status:'needed',createdAt:existing?.createdAt||now(),updatedAt:now()};
     assert(item.receivedQty<=item.orderedQty||item.orderedQty===0,'已到货数量不能超过下单数量');if(item.status!=='cancelled'){item.status=item.orderedQty===0?'needed':item.receivedQty>=item.orderedQty?'received':item.receivedQty>0?'partial':'ordered';}if(existing)s.procurementItems[s.procurementItems.findIndex(x=>x.id===item.id)]=item;else s.procurementItems.push(item);result.procurementItemId=item.id;
   } else if(action.type==='procurement.receive'){
-    const item=s.procurementItems.find(x=>x.id===action.itemId);assert(item&&item.status!=='cancelled','采购项不存在或已取消');const qty=integer(action.qty,'到货数量',1);assert(item.orderedQty>0&&item.receivedQty+qty<=item.orderedQty,`本次最多可登记 ${Math.max(0,item.orderedQty-item.receivedQty)} 个`);const stock=findStock(s,item.partId,action.locationId,action.bin||'');result.order=postOrder(s,{type:'入库',source:'采购到货',note:action.note||item.note||item.supplier,lines:[{stockId:stock.id,delta:qty,base:qty,loss:0}],requestId:action.requestId,procurementItemId:item.id});item.receivedQty+=qty;item.status=item.receivedQty>=item.orderedQty?'received':'partial';item.updatedAt=now();
+    const item=s.procurementItems.find(x=>x.id===action.itemId);assert(item&&item.status!=='cancelled','采购项不存在或已取消');const qty=integer(action.qty,'到货数量',1);assert(item.orderedQty>0&&item.receivedQty+qty<=item.orderedQty,`本次最多可登记 ${Math.max(0,item.orderedQty-item.receivedQty)} 个`);const stock=findStock(s,item.partId,action.locationId,action.bin||'');result.order=postOrder(s,{type:'入库',source:'采购到货',note:action.note||item.note||item.supplier,time:action.time,lines:[{stockId:stock.id,delta:qty,base:qty,loss:0}],requestId:action.requestId,procurementItemId:item.id});item.receivedQty+=qty;item.status=item.receivedQty>=item.orderedQty?'received':'partial';item.updatedAt=now();
     const actual=action.actualUnitPrice===''||action.actualUnitPrice==null?item.actualUnitPrice:decimal(action.actualUnitPrice,'实际采购单价',0);if(actual){item.actualUnitPrice=actual;s.observations.push({id:id(),partId:item.partId,price:actual,currency:item.currency||'CNY',quantityTier:String(qty),source:item.supplier||'实际采购',sourceUrl:'',asOf:now(),recordedAt:now(),kind:'purchase',lifecycle:'',notice:`采购到货 ${qty} 个`});}
   } else if(action.type==='procurement.cancel'){
     const item=s.procurementItems.find(x=>x.id===action.itemId);assert(item,'采购项不存在');item.status='cancelled';item.updatedAt=now();
@@ -226,7 +232,7 @@ export function validateBackup(raw) {
   s.parts=s.parts.map(p=>({...normalizePart(p,p),updatedAt:p.updatedAt||p.createdAt||now()})); assert(new Set(s.parts.map(p=>p.sku.toLowerCase())).size===s.parts.length,'备份包含重复元件编号');
   const stockKeys=new Set();
   for (const st of s.stocks) { integer(st.qty,'备份库存'); assert(s.parts.some(p=>p.id===st.partId)&&s.locations.some(l=>l.id===st.locationId),'备份库位关联无效'); assert(typeof st.bin==='string','备份库位格式无效'); const key=JSON.stringify([st.partId,st.locationId,st.bin]); assert(!stockKeys.has(key),'备份包含重复库位');stockKeys.add(key); }
-  for (const o of s.orders) { assert(['入库','出库','损耗','盘点','调拨','撤销'].includes(o.type),'流水类型无效'); assert(Array.isArray(o.lines)&&o.lines.length>0,'流水批次无效'); for (const l of o.lines) assert(s.stocks.some(st=>st.id===l.stockId)&&Number.isSafeInteger(l.delta),'流水数量或库位无效'); assert(Number.isFinite(Date.parse(o.time)),'流水时间无效');o.lotCode=clean(o.lotCode,300);o.supplier=clean(o.supplier,300);o.labelText=clean(o.labelText,6000);o.source=clean(o.source);o.note=clean(o.note,2000);if(o.undoneBy)assert(s.orders.some(x=>x.id===o.undoneBy&&x.type==='撤销'&&x.undoOf===o.id),'撤销关联无效'); }
+  for (const o of s.orders) { assert(['入库','出库','损耗','盘点','调拨','撤销'].includes(o.type),'流水类型无效'); assert(Array.isArray(o.lines)&&o.lines.length>0,'流水批次无效'); for (const l of o.lines) assert(s.stocks.some(st=>st.id===l.stockId)&&Number.isSafeInteger(l.delta),'流水数量或库位无效'); assert(Number.isFinite(Date.parse(o.time)),'流水时间无效');if(o.recordedAt)assert(Number.isFinite(Date.parse(o.recordedAt)),'系统登记时间无效');o.lotCode=clean(o.lotCode,300);o.supplier=clean(o.supplier,300);o.labelText=clean(o.labelText,6000);o.source=clean(o.source);o.note=clean(o.note,2000);if(o.undoneBy)assert(s.orders.some(x=>x.id===o.undoneBy&&x.type==='撤销'&&x.undoOf===o.id),'撤销关联无效'); }
   const ledger=new Map();
   for (const e of s.events) { const st=s.stocks.find(x=>x.id===e.stockId); assert(st&&st.partId===e.partId&&st.locationId===e.locationId&&st.bin===e.bin&&s.orders.some(o=>o.id===e.orderId),'备份流水关联无效');integer(e.before,'流水前数量');integer(e.after,'流水后数量'); assert(Number.isSafeInteger(e.delta)&&e.before+e.delta===e.after,'备份流水数量不平衡'); assert((ledger.get(e.stockId)??0)===e.before,'备份流水不连续');ledger.set(e.stockId,e.after); }
   for (const st of s.stocks) assert((ledger.get(st.id)??0)===st.qty,'备份库存与流水不一致');
