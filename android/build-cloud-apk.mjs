@@ -22,7 +22,7 @@ java=java.replace('super.onCreate(savedInstanceState);','super.onCreate(savedIns
 java=java.replace('configureWebView();','configureWebView();\n        if (APP_URL.contains("component-hub.invalid")) showServerSettings();');
 java=java.replace('ComponentHubAndroid/1.7','ComponentHubAndroid/'+VERSION);
 java=java.replace(/if \(uri == null \|\| !"https".equalsIgnoreCase\(uri.getScheme\(\)\)\s*\|\| !APP_HOST.equalsIgnoreCase\(uri.getHost\(\)\)\) return null;/,'if (!isServerOrigin(uri)) return null;');
-java=java.replace('} else if ("/app.js".equals(path)) {','} else if ("/team.css".equals(path)) {\n            asset = "team.css"; mime = "text/css";\n        } else if ("/workflows.js".equals(path)) {\n            asset = "workflows.js"; mime = "application/javascript";\n        } else if ("/app.js".equals(path)) {');
+java=java.replace('} else if ("/app.js".equals(path)) {','} else if ("/team.css".equals(path)) {\n            asset = "team.css"; mime = "text/css";\n        } else if ("/refinements.css".equals(path)) {\n            asset = "refinements.css"; mime = "text/css";\n        } else if ("/workflows.js".equals(path)) {\n            asset = "workflows.js"; mime = "application/javascript";\n        } else if ("/app.js".equals(path)) {');
 java=java.replace(/if \(\("http".equalsIgnoreCase\(scheme\) \|\| "https".equalsIgnoreCase\(scheme\)\)\s*&& APP_HOST.equalsIgnoreCase\(uri.getHost\(\)\)\) \{/,'if (isServerOrigin(uri)) {');
 java=java.replace('private class AndroidDownloads {','private class AndroidDownloads {\n        @JavascriptInterface public void checkForUpdates() { runOnUiThread(() -> { if (appUpdater != null) appUpdater.check(APP_URL, true); }); }\n        @JavascriptInterface public void changeServer() { runOnUiThread(() -> showServerSettings()); }');
 java=java.replace('正在运行 Tailscale 和元件仓','正在运行多人测试版，并且地址正确');
@@ -56,6 +56,14 @@ const methods=`
     }
 `;
 java=java.replace('    private FrameLayout.LayoutParams matchParent()',methods+'\n    private FrameLayout.LayoutParams matchParent()');
+java=java.replace('private class AppWebChromeClient extends WebChromeClient {',`private class AppWebChromeClient extends WebChromeClient {
+        @Override public boolean onJsConfirm(WebView view, String url, String message, android.webkit.JsResult result) {
+            new AlertDialog.Builder(MainActivity.this).setTitle("确认操作").setMessage(message)
+                .setPositiveButton("确认", (d,w) -> result.confirm())
+                .setNegativeButton("取消", (d,w) -> result.cancel())
+                .setOnCancelListener(d -> result.cancel()).show();
+            return true;
+        }`);
 if(java.includes('APP_HOST'))throw Error('Unconverted origin check');fs.writeFileSync(dst+'/app/src/main/java/com/wayne/componenthub/MainActivity.java',java);
 const assets='D:/Codex/2026-09-10/ba/work/component-hub-team-cloud/public';for(const f of ['index.html','app.js','styles.css','team.css','logic.js','workflows.js','qr.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest','refinements.css'])fs.copyFileSync(assets+'/'+f,dst+'/app/src/main/assets/web/'+f);
 console.log('元件仓 '+VERSION+' APK prepared: https://'+ip+'/');
