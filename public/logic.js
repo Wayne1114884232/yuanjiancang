@@ -93,6 +93,36 @@ export function guessColumns(headers) {
   };
 }
 const slug=s=>String(s||'').trim().toUpperCase().replace(/[μµ]/g,'U').replace(/Ω/g,'OHM').replace(/[^A-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,55);
+const partPrefix={电容:'C',电阻:'R',二极管:'D',电感:'L',三极管:'Q',MOS管:'Q',IC:'U',连接器:'J',其他:'X'};
+function compactNumber(n){
+  const s=Number(n).toPrecision(12).replace(/(?:\.0+|(?<=\d)0+)$/,'').replace(/\.$/,'');
+  return s;
+}
+function engineeringValue(parsed){
+  if(!parsed||!Number.isFinite(parsed.base))return '';
+  if(parsed.kind==='R'){
+    const a=Math.abs(parsed.base), scale=a>=1e6?1e6:a>=1e3?1e3:1, unit=a>=1e6?'M':a>=1e3?'K':'R', n=parsed.base/scale;
+    if(n<1&&scale===1)return `0R${String(n).split('.')[1]||'0'}`;
+    const s=compactNumber(n); return s.includes('.')?s.replace('.',unit):`${s}${unit}`;
+  }
+  const a=Math.abs(parsed.base), scale=a>=1?1:a>=1e-3?1e-3:a>=1e-6?1e-6:a>=1e-9?1e-9:1e-12;
+  const unit=parsed.kind==='C'?'F':'H', prefix=scale===1?'':scale===1e-3?'M':scale===1e-6?'U':scale===1e-9?'N':'P', s=compactNumber(parsed.base/scale);
+  return `${s}${prefix}${unit}`;
+}
+function partToken(value,category,name=''){
+  const parsed=parseElectricalValue(value,category==='电阻'?'R':'');
+  if(parsed)return engineeringValue(parsed);
+  const raw=String(name||value||'PART').normalize('NFKC').replace(/[μµ]/g,'U').replace(/Ω/g,'OHM');
+  return raw.toUpperCase().replace(/[^0-9A-Z\u4E00-\u9FFF]+/g,'-').replace(/^-+|-+$/g,'').slice(0,55)||'PART';
+}
+export function generatePartSku(part={}){
+  const category=String(part.category||'其他'), prefix=partPrefix[category]||'X';
+  const valueToken=partToken(part.value,category,part.name);
+  const packageToken=String(part.package||'UNKNOWN').normalize('NFKC').toUpperCase().replace(/[^0-9A-Z\u4E00-\u9FFF]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30)||'UNKNOWN';
+  const tolerance=String(part.tolerance??'').replace(/[^0-9.]/g,'');
+  return `${prefix}-${valueToken}-${packageToken}-${tolerance?`${tolerance}%`:'NA'}`.slice(0,280);
+}
+
 function inferCategory(value,sku,packageName='') {
   const text=`${value} ${sku}`.toUpperCase();
   if(/(?:F$|UF|NF|PF|CAP|电容)/i.test(text))return '电容';
@@ -201,9 +231,8 @@ export function labelPartConflicts(label,existing){
  return errors;
 }
 export function labelSuggestedSku(p){
- if(p.sku?.trim())return p.sku.trim();const value=parseElectricalValue(p.value,p.category==='电阻'?'R':'');if(!value||!p.package)return '';
- const val=value.kind==='R'?`${Number(value.base.toPrecision(12))}OHM`:`${Number(value.base.toPrecision(12))}${value.kind==='C'?'F':'H'}`;
- return [value.kind,val,p.package,p.tolerance&&p.tolerance+'%',p.voltage,p.dielectric,p.power,p.manufacturer,p.mount].filter(Boolean).join('-').replace(/\s+/g,'').slice(0,280);
+ if(p.sku?.trim())return p.sku.trim();
+ return generatePartSku(p);
 }
 
 export function collectAlerts(state) {

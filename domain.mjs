@@ -1,6 +1,6 @@
 import {savePicking,checkedPicking} from './picking.mjs';
 import {migrateLots,recordLots,validateLots} from './lots.mjs';
-import {labelPartConflicts} from './public/logic.js';
+import {labelPartConflicts,generatePartSku} from './public/logic.js';
 import {sortPickupStocks} from './public/workflows.js';
 import { randomUUID } from 'node:crypto';
 
@@ -23,9 +23,11 @@ export function normalizePart(raw, existing = {}) {
   const p = {...existing};
   const strings = ['sku','name','manufacturer','lcscCode','package','value','tolerance','voltage','power','current','dielectric','temperature','tcr','type','frequency','rdson','vgs','polarity','function','pins','interface','description','supplier','quantityTier'];
   for (const key of strings) p[key] = clean(raw[key], key==='description'?3000:300);
-  assert(p.name, '请填写元件名称或型号'); assert(p.sku, '请填写唯一编号 / 型号');
+  assert(p.name, '请填写元件名称或型号');
   assert(categories.includes(raw.category), '请选择有效分类'); p.category=raw.category;
   assert(['贴片','插件'].includes(raw.mount), '请选择贴片或插件'); p.mount=raw.mount;
+  if(!p.sku)p.sku=generatePartSku(p);
+  assert(p.sku, '请填写唯一编号 / 型号');
   if(!p.lcscCode&&/^C\d+$/i.test(p.sku))p.lcscCode=p.sku.toUpperCase();
   if(p.lcscCode){p.lcscCode=p.lcscCode.toUpperCase();assert(/^C\d+$/.test(p.lcscCode),'立创商城编号格式应为 C 加数字，例如 C17976');}
   p.datasheetUrl=url(raw.datasheetUrl); p.purchaseUrl=url(raw.purchaseUrl);
@@ -111,7 +113,10 @@ export function applyAction(original, action) {
   } else if (action.type==='part.save') {
     const existing=action.part.id?s.parts.find(p=>p.id===action.part.id):undefined;
     assert(!action.part.id||existing,'元件不存在');
-    const p=normalizePart(action.part,existing); assert(!s.parts.some(x=>x.id!==p.id&&x.sku.toLowerCase()===p.sku.toLowerCase()),'编号 / 型号已存在，请使用原元件入库；不同规格请添加编号后缀');
+    const explicitSku=clean(action.part?.sku);
+    const p=normalizePart(action.part,existing);
+    if(!existing&&!explicitSku){const base=p.sku;let suffix=2;while(s.parts.some(x=>x.sku.toLowerCase()===p.sku.toLowerCase()))p.sku=`${base}-${suffix++}`;}
+    assert(!s.parts.some(x=>x.id!==p.id&&x.sku.toLowerCase()===p.sku.toLowerCase()),'编号 / 型号已存在，请使用原元件入库；不同规格请添加编号后缀');
     if (existing) s.parts[s.parts.findIndex(x=>x.id===p.id)]=p; else s.parts.push(p);
     if (!existing && !action.skipStock) {
       const stock=findStock(s,p.id,action.locationId,action.bin); const qty=integer(action.qty??0,'初始数量');
