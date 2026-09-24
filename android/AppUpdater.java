@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Intent;
+import android.content.ClipData;
+import androidx.core.content.FileProvider;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -37,7 +39,7 @@ public final class AppUpdater {
     private int currentCode() throws Exception {return activity.getPackageManager().getPackageInfo(activity.getPackageName(),0).versionCode;}
     private HttpsURLConnection open(String address) throws Exception {
         URL url=new URL(address); if(!"https".equals(url.getProtocol()))throw new IOException("更新地址须为 HTTPS");
-        HttpsURLConnection c=(HttpsURLConnection)url.openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(20000);c.setReadTimeout(65000);c.setRequestProperty("Accept","application/json, application/vnd.android.package-archive");
+        HttpsURLConnection c=(HttpsURLConnection)url.openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(20000);c.setReadTimeout(65000);c.setUseCaches(false);c.setRequestProperty("Cache-Control","no-cache");c.setRequestProperty("Accept","application/json, application/vnd.android.package-archive");
         if(c.getResponseCode()!=200){c.disconnect();throw new IOException("服务暂时不可用，请稍后重试");}return c;
     }
     public void check(String base, boolean manual) {
@@ -59,12 +61,18 @@ public final class AppUpdater {
                 ui(() -> {prompt=new AlertDialog.Builder(activity).setTitle("发现新版本 "+release.optString("apkVersion"))
                     .setMessage(release.optString("notes")+"\n\n点击更新后将在 APP 内下载，完成后打开安卓安装确认。原账号和库存保留。")
                     .setNegativeButton("稍后提醒",(d,w)->prefs.edit().putInt("laterCode",code).putLong("laterUntil",System.currentTimeMillis()+86400000L).apply())
+                    .setNeutralButton("浏览器下载",(d,w)->browserDownload(origin,release))
                     .setPositiveButton("立即更新",(d,w)->download(origin,release)).create();prompt.setCanceledOnTouchOutside(false);prompt.show();});
             }catch(Exception ex){if(manual)notice("检查更新失败："+ex.getMessage());}
             finally{busy.set(false);}
         },"hub-update-check").start();
     }
-    private File apkFile(){return new File(activity.getCacheDir(),"component-hub-update.apk");}
+    private File updateDir(){File dir=new File(activity.getFilesDir(),"updates");if(!dir.isDirectory()&&!dir.mkdirs())throw new IllegalStateException("无法创建更新目录");return dir;}
+    private File apkFile(){return new File(updateDir(),"component-hub-update.apk");}
+    private void browserDownload(String origin,JSONObject release){
+        try{Uri uri=Uri.parse(origin+"/downloads/component-hub.apk").buildUpon().appendQueryParameter("v",release.optString("sha256")).build();activity.startActivity(new Intent(Intent.ACTION_VIEW,uri));}
+        catch(Exception e){notice("无法打开浏览器，请用手机浏览器打开元件仓下载地址");}
+    }
     private static String digest(File file)throws Exception{MessageDigest md=MessageDigest.getInstance("SHA-256");try(InputStream in=new FileInputStream(file)){byte[] b=new byte[16384];int n;while((n=in.read(b))!=-1)md.update(b,0,n);}StringBuilder s=new StringBuilder();for(byte b:md.digest())s.append(String.format("%02x",b&255));return s.toString();}
     private void verify(File file,String hash,int code)throws Exception{
         if(!digest(file).equalsIgnoreCase(hash))throw new IOException("安装包校验失败，请重新下载");
@@ -77,13 +85,13 @@ public final class AppUpdater {
     private void download(String origin,JSONObject release){
         if(!busy.compareAndSet(false,true))return;
         progress=new ProgressDialog(activity);progress.setTitle("正在下载更新");progress.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);progress.setMax(100);progress.setCancelable(false);progress.show();
-        new Thread(()->{File temp=new File(activity.getCacheDir(),"component-hub-update.part");
-            try{long expected=release.getLong("size");HttpsURLConnection c=open(origin+"/downloads/component-hub.apk");
+        new Thread(()->{File temp=null;
+            try{temp=new File(updateDir(),"component-hub-update.part");long expected=release.getLong("size");HttpsURLConnection c=open(origin+"/downloads/component-hub.apk?v="+release.getString("sha256"));
                 try(InputStream in=c.getInputStream();OutputStream out=new FileOutputStream(temp)){byte[] b=new byte[16384];int n;long count=0;while((n=in.read(b))!=-1){if(closed)throw new IOException("下载已中断");count+=n;if(count>expected||count>32*1024*1024)throw new IOException("安装包大小不匹配");out.write(b,0,n);int percent=(int)(count*100/expected);ui(()->progress.setProgress(percent));}if(count!=expected)throw new IOException("下载不完整，请重试");}finally{c.disconnect();}
                 verify(temp,release.getString("sha256"),release.getInt("apkVersionCode"));File target=apkFile();if(target.exists()&&!target.delete())throw new IOException("无法替换旧安装包");if(!temp.renameTo(target))throw new IOException("无法保存更新");
                 prefs.edit().putString("hash",release.getString("sha256")).putInt("code",release.getInt("apkVersionCode")).apply();
                 ui(()->{progress.dismiss();install();});
-            }catch(Exception ex){temp.delete();ui(()->{progress.dismiss();new AlertDialog.Builder(activity).setTitle("更新未完成").setMessage(ex.getMessage()+"。现有版本仍可使用，请在“我的 → 检查更新”重试。").setPositiveButton("知道了",null).show();});}
+            }catch(Exception ex){if(temp!=null)temp.delete();ui(()->{progress.dismiss();new AlertDialog.Builder(activity).setTitle("更新未完成").setMessage(ex.getMessage()+"。现有版本仍可使用，请在“我的 → 检查更新”重试。").setNeutralButton("浏览器下载",(d,w)->browserDownload(origin,release)).setPositiveButton("知道了",null).show();});}
             finally{busy.set(false);}
         },"hub-update-download").start();
     }
@@ -93,7 +101,12 @@ public final class AppUpdater {
             if(Build.VERSION.SDK_INT>=26&&!activity.getPackageManager().canRequestPackageInstalls()){
                 new AlertDialog.Builder(activity).setTitle("允许安装元件仓更新").setMessage("首次更新需要在安卓设置中允许“元件仓”安装应用。返回后将继续打开安装确认。").setNegativeButton("稍后",null).setPositiveButton("去设置",(d,w)->{try{awaitingPermission=true;activity.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+activity.getPackageName())));}catch(Exception e){awaitingPermission=false;notice("无法打开安装权限设置");}}).show();return;
             }
-            Uri uri=Uri.parse("content://"+activity.getPackageName()+".updates/latest.apk");Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(uri,"application/vnd.android.package-archive");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);activity.startActivity(intent);
+            Uri uri=FileProvider.getUriForFile(activity,activity.getPackageName()+".updates",apkFile());
+            Intent intent=new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri,"application/vnd.android.package-archive");
+            intent.setClipData(ClipData.newRawUri("元件仓更新",uri));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            activity.startActivity(intent);
         }catch(Exception ex){notice("无法打开安装确认："+ex.getMessage());}
     }
     public void resume(String base){if(awaitingPermission){awaitingPermission=false;install();}else check(base,false);}
