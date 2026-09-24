@@ -67,7 +67,8 @@ const dielectric=input=>(String(input||'').toUpperCase().match(/\b(C0G|NP0|X7R|X
 function requirements(row={}){const category=row.category||row.draft?.category||'';return {category,value:parseElectricalValue(row.value||row.name||row.sku,category==='电阻'?'R':''),package:norm(row.package),voltage:parseVoltage(row.voltage||row.value),tolerance:row.tolerance!==undefined&&row.tolerance!==''?Number(String(row.tolerance).replace('%','')):parseTolerance(row.value),dielectric:dielectric(row.dielectric||row.value)};}
 export function compareBomPart(row,part){
   const a=requirements(row),b=requirements(part),conflicts=[],unknowns=[],differences=[];const exactSku=Boolean(row.sku&&norm(row.sku)===norm(part.sku));const exactGeneratedIdentity=!row.sku&&[row.draft?.sku,row.value,row.name].map(norm).filter(Boolean).some(token=>[part.sku,part.name,part.value].map(norm).includes(token));
-  if(a.value&&b.value&&!closeEnough(a.value.base,b.value.base))conflicts.push(`标称值不同：BOM ${row.value||a.value.source}，库存 ${part.value||b.value.source}`);else if(a.value&&!b.value)unknowns.push('库存未填写可比较的标称值');
+  if(a.category&&b.category&&a.category!==b.category)conflicts.push(`类别不同：BOM ${a.category}，库存 ${b.category}`);
+  if(a.value&&b.value&&(a.value.kind!==b.value.kind||!closeEnough(a.value.base,b.value.base)))conflicts.push(`标称值不同：BOM ${row.value||a.value.source}，库存 ${part.value||b.value.source}`);else if(a.value&&!b.value)unknowns.push('库存未填写可比较的标称值');
   if(a.package&&b.package&&a.package!==b.package)conflicts.push(`封装不同：BOM ${row.package}，库存 ${part.package}`);else if(a.package&&!b.package)unknowns.push('库存未填写封装');
   if(a.voltage!=null){if(b.voltage==null)unknowns.push('库存未填写耐压');else if(b.voltage<a.voltage)conflicts.push(`耐压不足：BOM ${a.voltage}V，库存 ${b.voltage}V`);else if(b.voltage>a.voltage)differences.push(`库存耐压 ${b.voltage}V，高于 BOM ${a.voltage}V`);}else if(a.category==='电容'&&!exactSku)unknowns.push('BOM 未注明耐压');
   if(a.tolerance!=null){if(b.tolerance==null)unknowns.push('库存未填写精度');else if(b.tolerance>a.tolerance)conflicts.push(`精度不满足：BOM ±${a.tolerance}%，库存 ±${b.tolerance}%`);else if(b.tolerance<a.tolerance)differences.push(`库存精度 ±${b.tolerance}%，优于 BOM ±${a.tolerance}%`);}else if(['电容','电阻'].includes(a.category)&&!exactSku)unknowns.push('BOM 未注明精度');
@@ -92,6 +93,36 @@ export function guessColumns(headers) {
   };
 }
 const slug=s=>String(s||'').trim().toUpperCase().replace(/[μµ]/g,'U').replace(/Ω/g,'OHM').replace(/[^A-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,55);
+const partPrefix={电容:'C',电阻:'R',二极管:'D',电感:'L',三极管:'Q',MOS管:'Q',IC:'U',连接器:'J',其他:'X'};
+function compactNumber(n){
+  const s=Number(n).toPrecision(12).replace(/(?:\.0+|(?<=\d)0+)$/,'').replace(/\.$/,'');
+  return s;
+}
+function engineeringValue(parsed){
+  if(!parsed||!Number.isFinite(parsed.base))return '';
+  if(parsed.kind==='R'){
+    const a=Math.abs(parsed.base), scale=a>=1e6?1e6:a>=1e3?1e3:1, unit=a>=1e6?'M':a>=1e3?'K':'R', n=parsed.base/scale;
+    if(n<1&&scale===1)return `0R${String(n).split('.')[1]||'0'}`;
+    const s=compactNumber(n); return s.includes('.')?s.replace('.',unit):`${s}${unit}`;
+  }
+  const a=Math.abs(parsed.base), scale=a>=1?1:a>=1e-3?1e-3:a>=1e-6?1e-6:a>=1e-9?1e-9:1e-12;
+  const unit=parsed.kind==='C'?'F':'H', prefix=scale===1?'':scale===1e-3?'M':scale===1e-6?'U':scale===1e-9?'N':'P', s=compactNumber(parsed.base/scale);
+  return `${s}${prefix}${unit}`;
+}
+function partToken(value,category,name=''){
+  const parsed=parseElectricalValue(value,category==='电阻'?'R':'');
+  if(parsed)return engineeringValue(parsed);
+  const raw=String(name||value||'PART').normalize('NFKC').replace(/[μµ]/g,'U').replace(/Ω/g,'OHM');
+  return raw.toUpperCase().replace(/[^0-9A-Z\u4E00-\u9FFF]+/g,'-').replace(/^-+|-+$/g,'').slice(0,55)||'PART';
+}
+export function generatePartSku(part={}){
+  const category=String(part.category||'其他'), prefix=partPrefix[category]||'X';
+  const valueToken=partToken(part.value,category,part.name);
+  const packageToken=String(part.package||'UNKNOWN').normalize('NFKC').toUpperCase().replace(/[^0-9A-Z\u4E00-\u9FFF]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30)||'UNKNOWN';
+  const tolerance=String(part.tolerance??'').replace(/[^0-9.]/g,'');
+  return `${prefix}-${valueToken}-${packageToken}-${tolerance?`${tolerance}%`:'NA'}`.slice(0,280);
+}
+
 function inferCategory(value,sku,packageName='') {
   const text=`${value} ${sku}`.toUpperCase();
   if(/(?:F$|UF|NF|PF|CAP|电容)/i.test(text))return '电容';
@@ -200,9 +231,8 @@ export function labelPartConflicts(label,existing){
  return errors;
 }
 export function labelSuggestedSku(p){
- if(p.sku?.trim())return p.sku.trim();const value=parseElectricalValue(p.value,p.category==='电阻'?'R':'');if(!value||!p.package)return '';
- const val=value.kind==='R'?`${Number(value.base.toPrecision(12))}OHM`:`${Number(value.base.toPrecision(12))}${value.kind==='C'?'F':'H'}`;
- return [value.kind,val,p.package,p.tolerance&&p.tolerance+'%',p.voltage,p.dielectric,p.power,p.manufacturer,p.mount].filter(Boolean).join('-').replace(/\s+/g,'').slice(0,280);
+ if(p.sku?.trim())return p.sku.trim();
+ return generatePartSku(p);
 }
 
 export function collectAlerts(state) {
