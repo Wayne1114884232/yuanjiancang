@@ -312,11 +312,21 @@ document.addEventListener('submit',async e=>{const form=e.target;if(form.dataset
   if(form.id==='containerStocktakeForm'){const counts=ctx.stocks.map(stockId=>({stockId,qty:Number(d['count-'+stockId])}));await mutate({type:'container.stocktake',containerId:ctx.containerId,counts,note:d.note},form.dataset.requestId);closeModal();render();toast('元件盒盘点差异已统一提交');}
   if(form.id==='finishedForm'){await mutate({type:'finishedGood.post',projectId:ctx.projectId,...d,qty:Number(d.qty)},form.dataset.requestId);closeModal();render();toast('板卡 / 成品库存已更新');}
 }catch(error){if($('#dialog').open)errorInModal(error.message);else toast(error.message,true);}finally{if(submit.isConnected)submit.disabled=false;}});
+async function checkOwnerPreviewUpdate(){
+  if(!OWNER_PREVIEW)return;
+  const native=/ComponentHubAndroid\/([^\s]+)/.exec(navigator.userAgent||'')?.[1];
+  if(!native)return;
+  try{
+    const r=await api('version');
+    if(!r.apkVersion||r.apkVersion===native)return;
+    openModal('测试版有新版本',`<p>当前测试版：${esc(native)}</p><p>可用版本：${esc(r.apkVersion)}</p><p>${esc(r.notes||'')}</p><a class="btn btn-primary" href="/downloads/component-hub.apk">下载测试版 APK</a><p class="helper">当前安装包的更新入口尚未启用，请先下载并覆盖安装本次测试版；安装后后续测试版会支持 APP 内更新。</p>`);
+  }catch{}
+}
 async function initialize(){
   if(location.hash.startsWith('#share=')){await showSharedInventory(location.hash.slice(7));return;}
   const h=location.hash.slice(1);if(titles[h])view=h;
   restoreLastSnapshot();
-  try{await refreshIdentity();space=T.workspaces.some(w=>w.id===space)?space:T.workspaces[0]?.id;await load();connectEvents();}
+  try{await refreshIdentity();space=T.workspaces.some(w=>w.id===space)?space:T.workspaces[0]?.id;await load();connectEvents();await checkOwnerPreviewUpdate();}
   catch(e){if(e.network){try{const last=JSON.parse(localStorage.getItem('team-last-user')||'null');if(last){T.user=last.user;T.workspaces=last.workspaces;space=last.space;const cached=JSON.parse(localStorage.getItem(cacheKey('cache'))||'null');if(cached){S=cached;currentRole=S.access?.role||'readonly';render();setConnection(false);return;}}}catch{}}clearIdentity();showAuthScreen(e.status===401?'':e.message);}
   if('serviceWorker' in navigator&&window.isSecureContext&&!/ComponentHubAndroid\//.test(navigator.userAgent))navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
