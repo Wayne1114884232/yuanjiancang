@@ -21,3 +21,22 @@ body.dark{--bg:#101c1b;--surface:#172624;--surface-2:#1b2b29;--line:#2a403c;--te
 .ocr-text-picker .btn,.text-choices .btn{max-width:100%;white-space:normal;text-align:left;font-size:12px}
 .label-field-status{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .receipt-history{display:block;text-align:left;margin:6px 0;padding:10px;border:1px solid var(--line,#dce8e2);border-radius:10px}
+[hidden]{display:none!important}
+@media(max-width:700px){
+  .inventory-table{min-width:0!important;border-collapse:separate;border-spacing:0 10px}
+  .inventory-table thead{display:none}
+  .inventory-table tbody,.inventory-table tr,.inventory-table td{display:block;width:100%}
+  .inventory-table tr{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 13px;box-shadow:var(--shadow)}
+  .inventory-table td{padding:0;border:0}
+  .inventory-table td:first-child{position:absolute;top:13px;right:12px;width:auto}
+  .inventory-table td:nth-child(2){padding-right:30px}
+  .inventory-table td:nth-child(2) .part-cell{padding:0 0 8px;width:100%;text-align:left}
+  .inventory-table td:nth-child(3),.inventory-table td:nth-child(4){display:inline-block;width:50%;vertical-align:top;padding:5px 0;color:#5b7770}
+  .inventory-table td:nth-child(5),.inventory-table td:nth-child(6){display:inline-block;width:50%;vertical-align:top;padding:5px 0}
+  .inventory-table td:nth-child(5){text-align:left!important}
+  .inventory-table td:nth-child(5)::before{content:'实物库存 ';color:#93a29e;font-size:10px}
+  .inventory-table td:nth-child(6)::before{content:'可用状态 ';color:#93a29e;font-size:10px}
+  .inventory-table td:nth-child(7){padding-top:9px;border-top:1px solid #eef2f1;margin-top:5px}
+  .inventory-table td:nth-child(7) .row-actions{justify-content:flex-start;gap:18px}
+  .inventory-table td:nth-child(7) .text-btn{font-size:12px;padding:4px 0}
+}
