@@ -1,5 +1,7 @@
+import {openPreviewStore} from './preview-store.mjs';
 import http from 'node:http';
 import {VERSION,releaseInfo} from './release.mjs';
+import {PREVIEW_VERSION,previewReleaseInfo} from './owner-preview-release.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -14,10 +16,13 @@ import {validateBackup} from './domain.mjs';
 import {readSpreadsheet} from './spreadsheet.mjs';
 import {fetchLcscDetail,lcscSearchUrl} from './lcsc.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),publicDir=path.join(root,'public'),dataDir=path.resolve(process.env.COMPONENT_DATA_DIR||path.join(root,'data'));
-const store=await openCloudStore(),live=new LiveUpdates(store),execute=promisify(execFile),port=Number(process.env.PORT||4188),host=process.env.HOST||'0.0.0.0';
+const preview=process.env.OWNER_PREVIEW==='true';
+const appVersion=preview?PREVIEW_VERSION:VERSION;
+const ownerConfig=JSON.parse(fs.readFileSync(new URL('./owner-config.json',import.meta.url),'utf8'));
+const store=preview?openPreviewStore(path.join(dataDir,'owner-preview'),ownerConfig.username):await openCloudStore();
+const live=new LiveUpdates(store),execute=promisify(execFile),port=Number(process.env.PORT||4188),host=process.env.HOST||'0.0.0.0';
 const publicUrl=process.env.PUBLIC_URL||process.env.RENDER_EXTERNAL_URL||'';
 if(publicUrl)check(new URL(publicUrl).protocol==='https:','公网地址必须使用 HTTPS');
-const ownerConfig=JSON.parse(fs.readFileSync(new URL('./owner-config.json',import.meta.url),'utf8'));
 const ownerBinding=await store.configureOwner(ownerConfig.username);if(!ownerBinding.configured)console.warn('APP 所有者未绑定，代发恢复码已禁用。');
 const limits=new Map();
 const cookie=req=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('hub_team_session='))?.slice(17)||'';
@@ -31,11 +36,12 @@ const server=http.createServer(async(req,res)=>{try{
     check(!req.headers.origin||(publicUrl?[new URL(publicUrl).origin]:[`${u.protocol}//${req.headers.host}`,`https://${req.headers.host}`]).includes(req.headers.origin),'拒绝来自其他网站的请求',403);
     check(req.headers['sec-fetch-site']!=='cross-site','拒绝跨网站请求',403);
     const route=u.pathname.slice(5),method=req.method,key=cookie(req);
-    if(route==='health'&&method==='GET')return json(res,200,{app:'component-hub-team',version:VERSION,mode:'cloud-multiplayer',storage:'postgresql',appOwnerConfigured:ownerBinding.configured});
+    if(route==='health'&&method==='GET')return json(res,200,{app:'component-hub-team',version:appVersion,mode:'cloud-multiplayer',storage:preview?'isolated-preview-file':'postgresql',channel:preview?'owner-preview':'stable',appOwnerConfigured:ownerBinding.configured});
     if(route==='auth/recover'&&method==='POST'){rate(req,'recover',5);const b=await body(req,4000);return json(res,200,await store.recover(b.username,b.code,b.password));}
     if(['auth/login','auth/register'].includes(route)&&method==='POST'){rate(req,'account',12);const b=await body(req,4000);const r=route==='auth/register'?await store.register(b.username,b.password,b.device||req.headers['user-agent']):await store.login(b.username,b.password,b.device||req.headers['user-agent']);const {key:sessionKey,...data}=r;return json(res,200,data,sessionHeader(req,sessionKey));}
     if(route==='share'&&method==='POST'){rate(req,'share',60);const b=await body(req,1000);return json(res,200,await store.share(b.key));}
-    if(route==='version'&&method==='GET')return json(res,200,releaseInfo());
+    if(route==='version'&&method==='GET'&&preview)check((await store.me(key)).user.appOwner,'仅限 APP 所有者',403);
+    if(route==='version'&&method==='GET')return json(res,200,preview?previewReleaseInfo():releaseInfo());
     const me=await store.me(key);
     if(route==='owner/recovery'&&method==='POST'){rate(req,'owner-recovery',5);return json(res,200,await store.ownerRecoveryCreate(key,await body(req,4000)));}
     if(route==='owner/recovery-log'&&method==='GET')return json(res,200,await store.ownerRecoveryLog(key));
@@ -72,11 +78,13 @@ const server=http.createServer(async(req,res)=>{try{
     if(route==='feed/refresh'&&method==='POST')throw new Error('请使用立创价格刷新；本版本尚未配置自定义厂商消息源');
     return json(res,404,{error:'接口不存在'});
   }
+  if(preview&&u.pathname.startsWith('/downloads/'))check((await store.me(cookie(req))).user.appOwner,'仅限 APP 所有者',403);
+  if(preview&&u.pathname==='/downloads/component-hub.apk')u.pathname='/downloads/component-hub-owner-preview.apk';
   check(['GET','HEAD'].includes(req.method),'不支持的请求方式',405);const rel=decodeURIComponent(u.pathname==='/'?'/index.html':u.pathname),file=path.resolve(publicDir,'.'+rel);check(file.startsWith(publicDir+path.sep),'路径无效',404);check(fs.existsSync(file)&&fs.statSync(file).isFile(),'文件不存在',404);
   const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.svg':'image/svg+xml','.png':'image/png','.apk':'application/vnd.android.package-archive'};
-  const downloadHeaders=path.extname(file)==='.apk'?{'Content-Length':fs.statSync(file).size,'Content-Disposition':'attachment; filename="component-hub-'+VERSION+'.apk"','Cache-Control':'no-store'}:{};
+  const downloadHeaders=path.extname(file)==='.apk'?{'Content-Length':fs.statSync(file).size,'Content-Disposition':'attachment; filename="component-hub-'+appVersion+'.apk"','Cache-Control':'no-store'}:{};
   res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",...downloadHeaders});if(req.method==='HEAD')return res.end();fs.createReadStream(file).pipe(res);
 }catch(e){const dbFailure=e.code&&typeof e.code==='string';json(res,dbFailure?503:(e.status||400),{error:dbFailure?'云数据库暂时不可用，请稍后刷新核对。未显示成功的操作请勿反复更换编号提交。':(e.message||'请求失败')});}});
-server.listen(port,host,()=>console.log('元件仓 '+VERSION+' listening on '+port));
+server.listen(port,host,()=>console.log('元件仓 '+appVersion+' listening on '+port));
 server.on('error',e=>{console.error('服务启动失败：'+(e.code||'UNKNOWN'));process.exitCode=1;});
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{live.close();server.closeAllConnections();server.close(async()=>{await store.close();process.exit(0);});});

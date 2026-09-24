@@ -41,3 +41,8 @@ body.dark{--bg:#101c1b;--surface:#172624;--surface-2:#1b2b29;--line:#2a403c;--te
   .inventory-table td:nth-child(7) .text-btn{font-size:14px;min-height:44px;min-width:44px;padding:8px 4px}
   .inventory-table input[type="checkbox"]{width:22px;height:22px}
 }
+
+/* 2.3 owner candidate: compact lot traceability and calmer interaction surfaces */
+.lot-summary{width:100%;display:flex;gap:6px;flex-wrap:wrap;margin:3px 0 2px 26px}.lot-summary span{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border-radius:6px;background:#f5f8f3;color:#72866d;font-size:10px}.lot-summary span b{color:#486a60;font-weight:700}.lot-summary span small{color:#9aa9a4}.lot-summary>small{font-size:10px;color:#9aa9a4;padding:4px}
+.stock-location{transition:border-color .18s,box-shadow .18s}.stock-location:hover{border-color:#b7d9d0;box-shadow:0 5px 15px rgba(24,79,68,.06)}
+.panel{box-shadow:0 8px 24px rgba(24,57,51,.045)}.btn{min-height:38px}.text-btn{min-height:32px}.field input,.field select,.field textarea{border-radius:9px;border-color:#dbe7e2}.field input:focus,.field select:focus,.field textarea:focus{border-color:#67ad9e;box-shadow:0 0 0 3px rgba(44,145,126,.12)}

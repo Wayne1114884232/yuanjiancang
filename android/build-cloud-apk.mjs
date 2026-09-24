@@ -57,7 +57,7 @@ const methods=`
 `;
 java=java.replace('    private FrameLayout.LayoutParams matchParent()',methods+'\n    private FrameLayout.LayoutParams matchParent()');
 if(java.includes('APP_HOST'))throw Error('Unconverted origin check');fs.writeFileSync(dst+'/app/src/main/java/com/wayne/componenthub/MainActivity.java',java);
-const assets='D:/Codex/2026-09-10/ba/work/component-hub-team-cloud/public';for(const f of ['index.html','app.js','styles.css','team.css','logic.js','workflows.js','qr.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'])fs.copyFileSync(assets+'/'+f,dst+'/app/src/main/assets/web/'+f);
+const assets='D:/Codex/2026-09-10/ba/work/component-hub-team-cloud/public';for(const f of ['index.html','app.js','styles.css','team.css','logic.js','workflows.js','qr.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest','refinements.css'])fs.copyFileSync(assets+'/'+f,dst+'/app/src/main/assets/web/'+f);
 console.log('元件仓 '+VERSION+' APK prepared: https://'+ip+'/');
 
 

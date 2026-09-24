@@ -41,7 +41,7 @@ test('PostgreSQL cloud persistence and two-device HTTP workflow',async t=>{
     assert.equal((await call('legacy/import','POST',{backup:legacy},jar,target)).status,400);
     assert.equal((await call('auth/logout','POST',{},jar)).status,200);await stop();await start();assert.equal((await call('state','GET',undefined,jar)).status,401);
     const newAccount=await call('auth/register','POST',{username:'newcloud','password':'cloud-password-12'});assert.equal(newAccount.status,200);await stop();await start();assert.equal((await call('auth/login','POST',{username:'newcloud','password':'cloud-password-12'})).status,200);
-    assert.equal((await call('version')).data.apkVersionCode,18);
+    assert.equal((await call('version')).data.apkVersionCode,19);
     let acct=await call('auth/login','POST',{username:'newcloud',password:'cloud-password-12'}),acctJar=acct.cookie;const acctLib=acct.data.workspaces[0].id;
     assert.equal((await call('auth/password','POST',{currentPassword:'wrong',password:'changed-pass-123'},acctJar)).status,401);
     const recovery=await call('auth/recovery','POST',{password:'cloud-password-12'},acctJar);assert.equal(recovery.status,200);assert.ok(recovery.data.code);
@@ -74,7 +74,7 @@ test('PostgreSQL cloud persistence and two-device HTTP workflow',async t=>{
     assert.equal((await call('auth/recover','POST',{username:'newcloud',code:delegated.data.code,password:'owner-assisted-again'})).status,400);
     const recovered=await call('auth/login','POST',{username:'newcloud',password:'owner-assisted-new'});
     assert.equal((await call('state','GET',undefined,recovered.cookie,acctLib)).data.state.stocks[0].qty,7);
-    const release=(await call('version')).data;assert.match(release.sha256,/^[a-f0-9]{64}$/);assert.ok(release.size>0);assert.equal(release.apkVersion,'2.2.6');
+    const release=(await call('version')).data;assert.match(release.sha256,/^[a-f0-9]{64}$/);assert.ok(release.size>0);assert.equal(release.apkVersion,'2.3.0');
     await stop();
   });
 });
