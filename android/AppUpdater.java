@@ -13,6 +13,7 @@ import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.webkit.CookieManager;
 import android.widget.Toast;
 import org.json.JSONObject;
 import java.io.*;
@@ -40,6 +41,8 @@ public final class AppUpdater {
     private HttpsURLConnection open(String address) throws Exception {
         URL url=new URL(address); if(!"https".equals(url.getProtocol()))throw new IOException("更新地址须为 HTTPS");
         HttpsURLConnection c=(HttpsURLConnection)url.openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(20000);c.setReadTimeout(65000);c.setUseCaches(false);c.setRequestProperty("Cache-Control","no-cache");c.setRequestProperty("Accept","application/json, application/vnd.android.package-archive");
+        String cookie=CookieManager.getInstance().getCookie(url.toString());
+        if(cookie!=null&&!cookie.isEmpty())c.setRequestProperty("Cookie",cookie);
         if(c.getResponseCode()!=200){c.disconnect();throw new IOException("服务暂时不可用，请稍后重试");}return c;
     }
     public void check(String base, boolean manual) {
