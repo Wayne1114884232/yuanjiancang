@@ -39,6 +39,37 @@ try{
  await submit('price-settings',{priceThreshold:'15'});assert.equal(run('S.settings.priceThreshold'),15);
  await run("mutate({type:'part.save',part:{sku:'R1',name:'10K',category:'电阻',mount:'贴片',value:'10k',minStock:0},locationId:S.locations[0].id,qty:40})");
 
+ // Label drafts retain manual corrections, shortcut values and library isolation.
+ const originalQuery=document.querySelector;
+ const labelKeys=['sku','category','mount','value','tolerance','package','qty','partId','locationId','bin','time','note','manufacturer','lotCode','voltage','dielectric','power','supplier','name'];
+ document.querySelector=q=>{
+   if(q==='[data-team-form="label-review"]')return {get values(){return Object.fromEntries(labelKeys.map(k=>[k,elements.get('f-'+k)?.value||'']));},get elements(){return Object.fromEntries(labelKeys.map(k=>[k,elements.get('f-'+k)]));}};
+   return originalQuery(q);
+ };
+ run("scanForm();$('#ocrText').value='4.7K 1% 0402 100pcs';renderOcrFields()");
+ assert.equal(run('readScanDraft().raw'),'4.7K 1% 0402 100pcs');
+ elements.get('f-bin').value='A-03';elements.get('f-qty').value='87';
+ await run("extraAction({dataset:{act:'label-chip',field:'tolerance',value:'5'}})");
+ assert.equal(run('readScanDraft().fields.tolerance'),'5');
+ run('closeModal();scanForm()');await run("extraAction({dataset:{act:'scan-restore'}})");
+ assert.equal(elements.get('f-qty').value,'87');assert.equal(elements.get('f-bin').value,'A-03');assert.equal(elements.get('f-tolerance').value,'5');
+ // Failed OCR can leave no raw text; manually entered fields must still be restorable.
+ elements.get('ocrText').value='';elements.get('f-sku').value='MANUAL-IC';run("modalContext.scanMode='ic-text';saveScanDraft();closeModal();scanForm()");
+ assert.match(elements.get('dialogBody').innerHTML,/恢复上次草稿/);
+ await run("extraAction({dataset:{act:'scan-restore'}})");assert.equal(elements.get('f-sku').value,'MANUAL-IC');assert.equal(run('modalContext.scanMode'),'ic-text');
+ run(`space='${personal}'`);assert.equal(run('readScanDraft()'),null);run(`space='${shared}'`);assert.equal(run('readScanDraft().fields.sku'),'MANUAL-IC');
+ run('clearScanDraft();closeModal()');assert.equal(run('readScanDraft()'),null);document.querySelector=originalQuery;
+ // Approval and failed writes have different user-visible outcomes.
+ const approver=await store.register('ui_approver','password-approver-123','test');
+ const adminInvite=store.teamAction(key,shared,{type:'invite.create',role:'admin',days:1,revision:store.me(key).revision});
+ store.teamAction(approver.key,approver.workspaces[0].id,{type:'invite.join',code:adminInvite.code,revision:store.me(approver.key).revision});
+ store.teamAction(key,shared,{type:'policy.save',approvals:true,revision:store.me(key).revision});
+ await assert.rejects(run("mutate({type:'stock.post',kind:'损耗',stockId:S.stocks[0].id,qty:1})"),/审批/);
+ assert.equal(elements.get('saveState').textContent,'已送交审批，库存尚未改变');assert.equal(run('S.stocks[0].qty'),40);
+ store.teamAction(key,shared,{type:'policy.save',approvals:false,revision:store.me(key).revision});
+ network=false;await assert.rejects(run("mutate({type:'stock.post',kind:'入库',stockId:S.stocks[0].id,qty:1})"),/连接/);
+ assert.match(elements.get('saveState').textContent,/结果待确认/);network=true;await run('load()');
+
  // A project can exist before any physical purchase; excluded mechanical rows stay out.
  const beforeProject=run('S.orders.length');
  run("bom={...bom,filename:'new.csv',locationId:S.locations[0].id,rows:[{draft:{sku:'NEW-IC',name:'NEW-IC',category:'IC',mount:'贴片'},perBoard:2},{excluded:true,draft:{sku:'SCREW'},perBoard:1}]} ;projectFromBom()");

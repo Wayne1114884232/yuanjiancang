@@ -26,7 +26,7 @@ body.dark{--bg:#101c1b;--surface:#172624;--surface-2:#1b2b29;--line:#2a403c;--te
   .inventory-table{min-width:0!important;border-collapse:separate;border-spacing:0 10px}
   .inventory-table thead{display:none}
   .inventory-table tbody,.inventory-table tr,.inventory-table td{display:block;width:100%}
-  .inventory-table tr{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 13px;box-shadow:var(--shadow)}
+  .inventory-table tr{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 13px;box-shadow:var(--shadow)}
   .inventory-table td{padding:0;border:0}
   .inventory-table td:first-child{position:absolute;top:13px;right:12px;width:auto}
   .inventory-table td:nth-child(2){padding-right:30px}
@@ -38,5 +38,6 @@ body.dark{--bg:#101c1b;--surface:#172624;--surface-2:#1b2b29;--line:#2a403c;--te
   .inventory-table td:nth-child(6)::before{content:'可用状态 ';color:#93a29e;font-size:10px}
   .inventory-table td:nth-child(7){padding-top:9px;border-top:1px solid #eef2f1;margin-top:5px}
   .inventory-table td:nth-child(7) .row-actions{justify-content:flex-start;gap:18px}
-  .inventory-table td:nth-child(7) .text-btn{font-size:12px;padding:4px 0}
+  .inventory-table td:nth-child(7) .text-btn{font-size:14px;min-height:44px;min-width:44px;padding:8px 4px}
+  .inventory-table input[type="checkbox"]{width:22px;height:22px}
 }
