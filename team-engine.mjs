@@ -82,7 +82,9 @@ export class TeamEngine {
   authorize(db,user,l,m,a){
     check(allowedActions.has(a.type),'操作不受支持');check(m.role!=='readonly','只读成员不能修改库存',403);
     check(!globalActions.has(a.type)||manage(m),'此操作需要管理员权限',403);
-    if(a.type==='part.save'&&a.part?.critical)check(manage(m),'标记关键元件需要管理员权限',403);
+    if(['part.save','label.receive'].includes(a.type)&&a.part?.critical)check(manage(m),'标记关键元件需要管理员权限',403);
+    const autoParts=a.type==='bom.post'?a.rows:a.type==='project.save'?a.project?.rows:null;
+    if(Array.isArray(autoParts)&&autoParts.some(row=>row?.autoPart?.critical))check(manage(m),'标记关键元件需要管理员权限',403);
     if(a.type==='part.save'&&a.part?.id)check(manage(m),'编辑共享元件资料需要管理员权限',403);
     if(a.type==='order.undo')check(text(a.reason||a.note,500),'请填写撤销原因');
     if(a.type==='usage.record'&&a.lotId){const lot=safeLot(l.state,a.lotId);check(this.locationAllowed(m,l.state.stocks.find(st=>st.id===lot.stockId)?.locationId),'没有此批次地点的权限',403);}

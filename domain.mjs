@@ -1,10 +1,10 @@
 import {savePicking,checkedPicking} from './picking.mjs';
 import {migrateLots,recordLots,validateLots} from './lots.mjs';
-import {labelPartConflicts,generatePartSku} from './public/logic.js';
+import {CATEGORIES,labelPartConflicts,generatePartSku} from './public/logic.js';
 import {sortPickupStocks} from './public/workflows.js';
 import { randomUUID } from 'node:crypto';
 
-export const categories = ['电容','电阻','电感','二极管','三极管','MOS管','IC','连接器','其他'];
+export const categories = CATEGORIES;
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
 export const copy = x => structuredClone(x);
@@ -96,6 +96,7 @@ export function applyAction(original, action) {
   if(action.type==='label.receive') {
     integer(action.qty,'入库数量',1);const p=action.part;assert(p&&typeof p==='object','请核对标签参数');
     if(['电阻','电容','电感'].includes(p.category))assert(clean(p.value)&&clean(p.package),'请填写标称值与封装');
+    if(p.category==='晶振')assert(/^\d+(?:\.\d+)?\s*[kmg]?hz$/i.test(clean(p.value))&&clean(p.package),'晶振请填写有效频率与封装（如 26MHz / 2016）');
     let stock,partId;
     if(action.partId){const existing=s.parts.find(x=>x.id===action.partId);assert(existing,'所选元件不存在');const conflicts=labelPartConflicts(p,existing);assert(!conflicts.length,'标签参数与已有元件不符：'+conflicts.join('；'));partId=existing.id;stock=findStock(s,partId,action.locationId,action.bin);}
     else{const created=normalizePart(p);assert(!s.parts.some(x=>x.sku.toLowerCase()===created.sku.toLowerCase()),'编号已存在，请选择已有元件核对或修改编号');s.parts.push(created);partId=created.id;stock=findStock(s,partId,action.locationId,action.bin);}

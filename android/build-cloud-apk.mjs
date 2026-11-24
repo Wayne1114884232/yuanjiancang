@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 const work='D:/Codex/2026-09-10/ba/work/apk-builder',src=work+'/component-hub-webview-v2',dst=work+'/component-hub-cloud';
 fs.mkdirSync(dst+'/app',{recursive:true});for(const f of ['gradlew.bat','gradlew','gradle.properties','settings.gradle','build.gradle'])fs.copyFileSync(src+'/'+f,dst+'/'+f);fs.cpSync(src+'/gradle',dst+'/gradle',{recursive:true});fs.cpSync(src+'/app/src',dst+'/app/src',{recursive:true});
-let gradle=fs.readFileSync(src+'/app/build.gradle','utf8').replace("applicationId 'com.wayne.componenthub'","applicationId 'com.wayne.componenthub.team'").replace('versionCode 8','versionCode '+APK_VERSION_CODE).replace("versionName '1.7'","versionName '"+VERSION+"'");gradle=gradle.replace('minSdkVersion 21',"minSdkVersion 23\n        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }").replace('dependencies {',"dependencies {\n    implementation 'androidx.core:core:1.9.0'\n    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'");fs.writeFileSync(dst+'/app/build.gradle',gradle);
+let gradle=fs.readFileSync(src+'/app/build.gradle','utf8').replace("applicationId 'com.wayne.componenthub'","applicationId 'com.wayne.componenthub.team'").replace('versionCode 8','versionCode '+APK_VERSION_CODE).replace("versionName '1.7'","versionName '"+VERSION+"'");gradle=gradle.replace('minSdkVersion 21',"minSdkVersion 23\n        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }").replace('dependencies {',"dependencies {\n    implementation 'androidx.core:core:1.9.0'\n    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'\n    implementation 'com.google.mlkit:text-recognition:16.0.1'");fs.writeFileSync(dst+'/app/build.gradle',gradle);
 let manifest=fs.readFileSync(dst+'/app/src/main/AndroidManifest.xml','utf8').replace('android:allowBackup="true"','android:allowBackup="false"').replace('<uses-permission android:name="android.permission.INTERNET" />','<uses-permission android:name="android.permission.INTERNET" /><uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />').replace('</application>','<provider android:name=".UpdateFileProvider" android:authorities="com.wayne.componenthub.team.updates" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths" /></provider></application>').replace(/\s*<intent-filter android:autoVerify="true">[\s\S]*?<\/intent-filter>/,'');fs.writeFileSync(dst+'/app/src/main/AndroidManifest.xml',manifest);
 const xml=dst+'/app/src/main/res/values/strings.xml';fs.writeFileSync(xml,fs.readFileSync(xml,'utf8'));
 const ip='yuanjiancang.onrender.com';
@@ -20,7 +20,15 @@ java=java.replace('import android.app.Activity;','import android.app.Activity;\n
 java=java.replace(/private static final String APP_URL = [^;]+;/,`private String APP_URL = "https://${ip}/";`).replace(/    private static final String APP_HOST = [^;]+;\r?\n/,'');
 java=java.replace('super.onCreate(savedInstanceState);','super.onCreate(savedInstanceState);\n        APP_URL = getPreferences(MODE_PRIVATE).getString("teamServer", APP_URL);\n        if (!APP_URL.startsWith("https://") || APP_URL.contains("component-hub.invalid")) APP_URL = "https://yuanjiancang.onrender.com/";');
 java=java.replace('configureWebView();','configureWebView();\n        if (APP_URL.contains("component-hub.invalid")) showServerSettings();');
-java=java.replace('ComponentHubAndroid/1.7','ComponentHubAndroid/'+VERSION);
+java=java.replace('ComponentHubAndroid/1.7','ComponentHubAndroid/'+VERSION+' ComponentHubBuild/'+APK_VERSION_CODE);
+java=java.replace('return new WebResourceResponse(mime, encoding, input);', `
+            WebResourceResponse response = new WebResourceResponse(mime, encoding, input);
+            if ("text/html".equals(mime)) {
+                java.util.Map<String, String> headers = new java.util.HashMap<>();
+                headers.put("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+                response.setResponseHeaders(headers);
+            }
+            return response;`.trim());
 java=java.replace(/if \(uri == null \|\| !"https".equalsIgnoreCase\(uri.getScheme\(\)\)\s*\|\| !APP_HOST.equalsIgnoreCase\(uri.getHost\(\)\)\) return null;/,'if (!isServerOrigin(uri)) return null;');
 java=java.replace('} else if ("/app.js".equals(path)) {','} else if ("/team.css".equals(path)) {\n            asset = "team.css"; mime = "text/css";\n        } else if ("/refinements.css".equals(path)) {\n            asset = "refinements.css"; mime = "text/css";\n        } else if ("/workflows.js".equals(path)) {\n            asset = "workflows.js"; mime = "application/javascript";\n        } else if ("/app.js".equals(path)) {');
 java=java.replace(/if \(\("http".equalsIgnoreCase\(scheme\) \|\| "https".equalsIgnoreCase\(scheme\)\)\s*&& APP_HOST.equalsIgnoreCase\(uri.getHost\(\)\)\) \{/,'if (isServerOrigin(uri)) {');

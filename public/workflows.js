@@ -1,4 +1,5 @@
 // Shared preview rules: no network calls and no stock changes.
+import {normalizeAbsoluteTolerance} from './logic.js';
 export function labelTextChoices(text){
  const lines=String(text||'').slice(0,6000).split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
  return [...new Set(lines.flatMap(line=>[line,...line.split(/\s+|[，,;；:：=]/)]).filter(x=>x.length&&x.length<=160))].slice(0,100);
@@ -7,7 +8,7 @@ export function selectedLabelValue(text,field){
  const s=String(text||'').trim();if(!s)throw Error('请先选择或填写文字');
  if(['sku','package','manufacturer','lotCode','supplier','value'].includes(field))return s;
  if(field==='qty'){const m=s.match(/^(\d[\d,]*)\s*(?:pcs|个|颗|只)?$/i),n=Number(m?.[1].replace(/,/g,''));if(!m||!Number.isSafeInteger(n)||n<1||n>1e9)throw Error('数量须为明确的整数个数，请修改选中文字');return String(n);}
- if(field==='tolerance'){const m=s.match(/^(?:±)?\s*(\d+(?:\.\d+)?)\s*%?$/);if(!m||Number(m[1])>100)throw Error('精度应为百分数，例如 1%');return m[1];}
+ if(field==='tolerance'){const absolute=normalizeAbsoluteTolerance(s);if(absolute)return absolute;const m=s.match(/^(?:±)?\s*(\d+(?:\.\d+)?)\s*%?$/);if(!m||Number(m[1])>100)throw Error('请选用百分比精度或带单位的误差，例如 1% 或 ±0.25pF');return m[1];}
  throw Error('不支持填入此字段');
 }
 export function sortPickupStocks(state,stocks,preferred=''){
